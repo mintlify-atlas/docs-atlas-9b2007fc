@@ -1,0 +1,144 @@
+---
+title: "Control the UR3e arm using real-time hand tracking"
+description: "Control the Colman UR3e arm live using hand position and orientation detected by an OAK-D camera and MediaPipe HandLandmarker running at 30 fps."
+---
+
+The hand tracking demo lets you pilot the UR3e arm in real time by moving your hand in front of an OAK-D camera. MediaPipe's HandLandmarker maps your hand's 2D position to the arm's XY workspace, palm size to Z height, and index-finger knuckle tilt to end-effector roll — all without touching a controller.
+
+## How it works
+
+### Architecture
+
+`arm_demo.py` runs two concurrent threads:
+
+- **Camera loop (main thread)** — opens a DepthAI pipeline, grabs 640×480 frames at 30 fps, and feeds them to `vision.HandLandmarker` in `VIDEO` mode. Detected targets are written to `latest_target` under a `threading.Lock`.
+- **Robot worker thread** — reads `latest_target`, discards stale data, and calls `go_to_pose` via MoveIt 2.
+
+Two helper ROS 2 nodes run inside a `MultiThreadedExecutor` on a separate spin thread:
+
+| Node | Purpose |
+|---|---|
+| `StopControl` | Exposes `/stop` (Trigger) — halts trajectory execution and sets `stop_event` |
+| `SceneManager` | Adds a table collision object (`2 m × 2 m × 1 cm` at z = −1 cm) to the MoveIt planning scene |
+
+### Workspace bounds
+
+The arm's Cartesian workspace is defined by two corners in `base_link` coordinates:
+
+```python
+WORLD_TOP_LEFT_X     = 0.12   # metres
+WORLD_TOP_LEFT_Y     = -0.27
+WORLD_TOP_LEFT_Z     = 0.10
+
+WORLD_BOTTOM_RIGHT_X = 0.50
+WORLD_BOTTOM_RIGHT_Y = 0.27
+WORLD_BOTTOM_RIGHT_Z = 0.30
+```
+
+### Coordinate mapping
+
+Hand landmarks are normalised to `[0, 1]` by MediaPipe. The demo swaps the image X and Y axes to match the arm's forward/lateral orientation:
+
+```python
+# Landmark 8 = index fingertip (used as the hand position proxy)
+wrist = hand[8]
+
+# Image Y  →  arm X (forward/back)
+target_x = WORLD_TOP_LEFT_X + (wrist.y * (WORLD_BOTTOM_RIGHT_X - WORLD_TOP_LEFT_X))
+# Image X  →  arm Y (left/right)
+target_y = WORLD_TOP_LEFT_Y + (wrist.x * (WORLD_BOTTOM_RIGHT_Y - WORLD_TOP_LEFT_Y))
+```
+
+### Palm size → Z height
+
+Z is derived from the perimeter of the palm polygon (landmarks 0, 1, 5, 9, 13, 17):
+
+```python
+PALM_MIN = 0.4   # normalised perimeter at maximum distance
+PALM_MAX = 1.9   # normalised perimeter at minimum distance
+
+palm_indices = [0, 1, 5, 9, 13, 17]
+palm_size = sum(
+    np.hypot(hand[b].x - hand[a].x, hand[b].y - hand[a].y)
+    for a, b in zip(palm_indices, palm_indices[1:] + [palm_indices[0]])
+)
+palm_size = (palm_size - PALM_MIN) / (PALM_MAX - PALM_MIN)
+
+target_z = WORLD_TOP_LEFT_Z + (palm_size * (WORLD_BOTTOM_RIGHT_Z - WORLD_TOP_LEFT_Z))
+```
+
+Move your hand closer to the camera to raise the arm; move it further away to lower it.
+
+### Roll mapping
+
+End-effector roll is estimated from the tilt of the index finger's proximal knuckle (landmarks 5 and 7):
+
+```python
+knuckle_dy = hand[7].y - hand[5].y
+knuckle_dz = hand[7].z - hand[5].z
+
+target_roll = np.arctan2(knuckle_dz, knuckle_dy)
+```
+
+The roll is then encoded into the quaternion's `qz` component before being passed to `go_to_pose`.
+
+### MoveIt 2 planner
+
+```python
+params = PlanRequestParameters(ur, "ompl")
+params.max_velocity_scaling_factor     = 0.75
+params.max_acceleration_scaling_factor = 0.75
+```
+
+The planner uses OMPL at 75% velocity and acceleration, which keeps motion smooth while remaining responsive to fast hand movements.
+
+## Prerequisites
+
+<Warning>
+  The `hand_landmarker.task` model file must be present in your working directory before you launch the demo. Download it with:
+
+  ```bash
+  pixi run download-mediapipe-model
+  ```
+</Warning>
+
+You also need the ColmanBringup to be running (robot driver + `ros2_control`). See the bringup launch documentation for details.
+
+## Running the demo
+
+<Tabs>
+  <Tab title="pixi">
+    ```bash
+    pixi run arm-demo
+    ```
+  </Tab>
+  <Tab title="ros2 launch">
+    ```bash
+    ros2 launch arm_demo arm_demo.launch.py \
+      gripper_type:=vacuum \
+      use_camera:=false
+    ```
+  </Tab>
+</Tabs>
+
+### Launch arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `gripper_type` | `vacuum` | Gripper model to load in the URDF |
+| `use_camera` | `true` | Whether to include the wrist camera in the robot description |
+
+<Note>
+  The `pixi run arm-demo` task sets `use_camera:=false`. Pass `use_camera:=true` when the wrist camera is physically attached and you want it modelled in the URDF.
+</Note>
+
+## Stopping the demo
+
+- Press **`q`** in the OpenCV preview window to quit cleanly.
+- Call the `/stop` service from another terminal:
+
+  ```bash
+  ros2 service call /stop std_srvs/srv/Trigger
+  ```
+
+Both methods flush the current trajectory and trigger a graceful shutdown.

@@ -1,0 +1,187 @@
+---
+title: "colman_motion: MoveIt 2 nodes for the Colman demos"
+description: "MoveIt 2 Python nodes for pick-and-place, eye-in-hand calibration data collection, and camera-to-gripper transform computation for the Colman arm."
+---
+
+The `colman_motion` package contains the motion planning executables for the Colman arm demos. All nodes use the `moveit_py` Python bindings to interface with MoveIt 2 and plan trajectories for the `ur_arm` planning group. The package provides three executables covering the full demo pipeline: autonomous pick-and-place, calibration data collection, and hand-eye transform solving.
+
+## Executables
+
+<CardGroup cols={3}>
+  <Card title="pick_and_place" icon="hand">
+    Autonomous vacuum pick-and-place loop that detects objects with AprilTags and moves them to a drop-off location.
+  </Card>
+  <Card title="eye_in_hand" icon="camera">
+    Interactive calibration data collector. Move the arm to each pose and press Enter to capture arm pose + tag pose sample pairs.
+  </Card>
+  <Card title="hand_eye_solve" icon="calculator">
+    Offline solver that reads a `.npz` calibration file and computes the camera-to-gripper transform using five OpenCV hand-eye methods.
+  </Card>
+</CardGroup>
+
+---
+
+## pick_and_place
+
+The main demo node. It instantiates `MoveItPy`, acquires the `ur_arm` planning component, and runs a continuous pick loop until a `/stop` service call is received or the process is interrupted. On each iteration it:
+
+1. Moves to `LOOK_ONE` (a downward-looking pose over the workspace) using joint-space planning
+2. Queries the AprilTag TF frame (`tag_1`) relative to `base_link` and validates positional stability (3 mm threshold over 1 s)
+3. Approaches above the tag, descends, activates the vacuum gripper via `/io_and_status_controller/set_io`
+4. Retreats, moves to the drop-off location `(0.2, -0.2, 0.0381)`, releases vacuum, and retreats
+
+The scene is initialised with a table collision object to prevent the arm from planning through the surface.
+
+### Key classes
+
+<AccordionGroup>
+  <Accordion title="StopControl">
+    A `Node` that exposes a `/stop` service (`std_srvs/Trigger`). When called it sets a `threading.Event` and invokes `trajectory_execution_manager.stop_execution(auto_clear=True)` so any in-progress trajectory is halted immediately. The `stop_event` is shared with every planning helper so they abort at the next check.
+  </Accordion>
+
+  <Accordion title="SceneManager">
+    A `Node` that wraps the MoveIt 2 planning scene monitor. Provides three methods:
+
+    - `add_box(obj_id, frame_id, dims, pos, orientation_w)` — inserts a box `CollisionObject` into the scene
+    - `remove_object(obj_id)` — removes a named collision object
+    - `clear_scene()` — removes all collision objects
+
+    All operations use `planning_scene_monitor.read_write()` and call `scene.current_state.update()` to ensure the scene is consistent before returning.
+  </Accordion>
+
+  <Accordion title="VacuumControl">
+    A `Node` that calls the UR I/O service (`ur_msgs/SetIO`) at `/io_and_status_controller/set_io` to toggle digital output pin 0, which controls the vacuum gripper. Uses a `ReentrantCallbackGroup` so service calls do not block the executor.
+
+    ```python
+    vacuum.set_digital_out(pin=0, state=True)   # vacuum on
+    vacuum.set_digital_out(pin=0, state=False)  # vacuum off
+    ```
+  </Accordion>
+
+  <Accordion title="TagLookup">
+    A `Node` that uses `tf2_ros.Buffer` to look up AprilTag transforms. `get_tag_pose(tag_frame, base_frame)` takes two samples 1 second apart and returns the transform only if both lookups succeed and the maximum positional delta is below 3 mm, rejecting stale or noisy readings.
+  </Accordion>
+</AccordionGroup>
+
+### Planning helper functions
+
+<ParamField path="go_to_pose" type="function">
+  Moves the arm to a Cartesian pose expressed in `base_link`. The pose goal is set on the `vacuum_tip_link` end-effector link.
+
+  ```python
+  go_to_pose(ur, arm, logger, x, y, z, qx=0.0, qy=0.0, qz=0.0, qw=1.0, params=None, stop_event=None)
+  ```
+
+  | Parameter    | Type                    | Description                                              |
+  |--------------|-------------------------|----------------------------------------------------------|
+  | `ur`         | `MoveItPy`              | MoveIt Python instance                                   |
+  | `arm`        | `PlanningComponent`     | Planning component for the `ur_arm` group                |
+  | `logger`     | `rclpy.Logger`          | ROS logger                                               |
+  | `x, y, z`   | `float`                 | Target position in metres, `base_link` frame             |
+  | `qx, qy, qz, qw` | `float`            | Target orientation as a quaternion (default: identity)   |
+  | `params`     | `PlanRequestParameters` | Optional OMPL planner parameters (velocity/accel scaling)|
+  | `stop_event` | `threading.Event`       | If set, aborts before planning                           |
+</ParamField>
+
+<ParamField path="go_to_joint_pose" type="function">
+  Moves the arm to a named joint configuration by constructing a joint constraint from a `RobotState`.
+
+  ```python
+  go_to_joint_pose(ur, arm, logger, joint_values, params=None, stop_event=None)
+  ```
+
+  | Parameter      | Type                    | Description                                              |
+  |----------------|-------------------------|----------------------------------------------------------|
+  | `ur`           | `MoveItPy`              | MoveIt Python instance                                   |
+  | `arm`          | `PlanningComponent`     | Planning component for the `ur_arm` group                |
+  | `logger`       | `rclpy.Logger`          | ROS logger                                               |
+  | `joint_values` | `dict[str, float]`      | Map of joint name to value in radians                    |
+  | `params`       | `PlanRequestParameters` | Optional OMPL planner parameters                         |
+  | `stop_event`   | `threading.Event`       | If set, aborts before planning                           |
+</ParamField>
+
+<ParamField path="go_to_configured_pose" type="function">
+  Moves the arm to a named pose defined in the SRDF (e.g. `"Up"`, `"Look1"`, `"Compact"`).
+
+  ```python
+  go_to_configured_pose(ur, arm, logger, pose_name)
+  ```
+
+  | Parameter   | Type                | Description                               |
+  |-------------|---------------------|-------------------------------------------|
+  | `ur`        | `MoveItPy`          | MoveIt Python instance                    |
+  | `arm`       | `PlanningComponent` | Planning component for the `ur_arm` group |
+  | `logger`    | `rclpy.Logger`      | ROS logger                                |
+  | `pose_name` | `str`               | Named state from the SRDF, e.g. `"Up"`   |
+</ParamField>
+
+<ParamField path="plan_and_execute" type="function">
+  Plans and executes a trajectory with automatic retry on planning failure. All higher-level motion helpers delegate to this function.
+
+  ```python
+  plan_and_execute(robot, planning_component, logger, single_plan_parameters=None, multi_plan_parameters=None, retries=3, stop_event=None)
+  ```
+
+  | Parameter                | Type                    | Description                                          |
+  |--------------------------|-------------------------|------------------------------------------------------|
+  | `robot`                  | `MoveItPy`              | MoveIt Python instance used to execute the trajectory|
+  | `planning_component`     | `PlanningComponent`     | Component with goal state already set                |
+  | `logger`                 | `rclpy.Logger`          | ROS logger                                           |
+  | `single_plan_parameters` | `PlanRequestParameters` | Single-pipeline planner parameters                   |
+  | `multi_plan_parameters`  | `MultiPlanRequestParameters` | Multi-pipeline planner parameters              |
+  | `retries`                | `int`                   | Number of planning attempts before giving up (default: 3)|
+  | `stop_event`             | `threading.Event`       | If set before each attempt, returns `False` immediately|
+
+  Returns `True` if a plan was found and executed successfully, `False` otherwise.
+</ParamField>
+
+### Pre-defined joint configurations
+
+The following joint dictionaries are defined as module-level constants and used throughout the pick-and-place loop:
+
+| Name       | Purpose                                       |
+|------------|-----------------------------------------------|
+| `UP`       | Matches the SRDF `"Up"` named state (home pose) |
+| `LOOK_ONE` | Camera looking straight down at quadrant 1   |
+| `LOOK_FOUR`| Camera looking straight down at quadrant 4 (rotated −90° pan) |
+| `COMPACT`  | Low-profile tucked pose for safe transit     |
+
+---
+
+## eye_in_hand
+
+An interactive calibration data collection node (`EyeInHandCalibration`). You move the arm to a sequence of poses that expose the AprilTag (frame `tag_20`) to the wrist camera, then press **Enter** at each pose to capture a sample. Press **q** to save and exit.
+
+Each captured sample records:
+
+- `arm_rotations` / `arm_translations` — `base_link` → `tool0` transform (rotation matrix + translation vector)
+- `tag_rotations` / `tag_translations` — `oakd_pro_camera_rgb_optical_frame_wrist` → `tag_20` transform
+
+Samples are saved to `calib_samples.npz` in the working directory.
+
+```bash
+ros2 run colman_motion eye_in_hand
+# Move arm to a pose, press Enter to capture...
+# Press q + Enter to save and exit
+```
+
+<Tip>
+Collect at least 15–20 samples covering diverse arm configurations to get a robust hand-eye calibration. Ensure the tag is clearly visible in the camera frame at each pose.
+</Tip>
+
+---
+
+## hand_eye_solve
+
+An offline script (not a ROS node) that reads `calib_samples.npz` and solves the hand-eye calibration problem using five OpenCV methods: TSAI, PARK, HORAUD, ANDREFF, and DANIILIDIS. For each method it prints the resulting `<origin xyz="..." rpy="..." />` Xacro fragment that you paste into the camera link definition in `colman.urdf.xacro`.
+
+```bash
+# Run from the directory containing calib_samples.npz
+python3 -m colman_motion.hand_eye_solve
+```
+
+The script removes the fixed optical-frame rotation (`−π/2, 0, −π/2` in XYZ Euler angles) before outputting RPY, so the result is in the physical body frame of the camera.
+
+<Note>
+Comparing results across all five methods is intentional: if they diverge significantly it usually means the calibration dataset needs more samples or better pose diversity.
+</Note>

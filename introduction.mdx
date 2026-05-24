@@ -1,0 +1,96 @@
+---
+title: "Introduction to ARM Demos: the Colman UR3e demo suite"
+description: "ARM Demos is a ROS 2 Jazzy collection for the Colman UR3e arm, featuring hand tracking, vision-guided pick-and-place, and eye-in-hand calibration."
+---
+
+ARM Demos is a collection of ROS 2 (Jazzy) applications built around the **Colman** platform — a Universal Robots UR3e arm equipped with a vacuum gripper and a wrist-mounted OAK-D Pro camera. The suite is designed for lab use and rapid experimentation: every dependency is pinned and installed through [Pixi](https://prefix.dev), so you get a fully reproducible environment with a single command on Linux.
+
+## What's included
+
+Three demos ship with the project, each exercising a different part of the robotics stack.
+
+<CardGroup cols={3}>
+  <Card title="Hand tracking" icon="hand" href="/demos/hand-tracking">
+    Control the arm in real time by moving your hand in front of the OAK-D camera. MediaPipe detects 21 hand landmarks at 30 fps; MoveIt 2 translates fingertip position and palm depth into Cartesian goals for the UR3e.
+  </Card>
+  <Card title="Pick and place" icon="robot" href="/demos/pick-and-place">
+    The arm scans the workspace using AprilTag markers detected through the OAK-D camera, plans a collision-free approach with MoveIt 2, and uses the vacuum gripper to pick and deposit objects autonomously.
+  </Card>
+  <Card title="Eye-in-hand calibration" icon="camera" href="/demos/eye-in-hand-calibration">
+    Calibrate the transform between the wrist-mounted OAK-D Pro camera and the robot's end-effector so that camera detections map accurately to robot-frame coordinates.
+  </Card>
+</CardGroup>
+
+## Key technologies
+
+| Technology | Role |
+|---|---|
+| **ROS 2 Jazzy** | Middleware and communication layer |
+| **MoveIt 2** | Motion planning, collision checking, trajectory execution |
+| **MediaPipe** | Real-time hand landmark detection (hand tracking demo) |
+| **DepthAI / OAK-D Pro** | Depth-capable camera on the robot wrist |
+| **YOLO (yolo11m-seg)** | Object detection and segmentation (`colman_perception`) |
+| **AprilTag** | Fiducial marker-based object localisation (pick-and-place) |
+| **Pixi** | Conda/PyPI package manager for reproducible environments |
+
+## Source packages
+
+The repository is a colcon workspace. All packages live under `src/`.
+
+<CardGroup cols={2}>
+  <Card title="arm_demo" icon="microchip" href="/demos/hand-tracking">
+    The hand tracking demo node. Reads OAK-D frames, runs MediaPipe, and sends MoveIt 2 pose goals in a background thread.
+  </Card>
+  <Card title="colman_bringup" icon="play" href="/packages/colman-bringup">
+    Launch files for the full robot stack: robot state publisher, ros2_control, MoveIt 2, camera, AprilTag, and YOLO nodes.
+  </Card>
+  <Card title="colman_description" icon="cube" href="/packages/colman-description">
+    URDF/Xacro robot description and ros2_control configuration for the UR3e with vacuum gripper and OAK-D mount.
+  </Card>
+  <Card title="colman_motion" icon="arrows-up-down-left-right" href="/packages/colman-motion">
+    Pick-and-place and hand-eye calibration nodes. Uses MoveIt 2 for planning and the UR IO interface for vacuum control.
+  </Card>
+  <Card title="colman_perception" icon="eye" href="/packages/colman-perception">
+    Camera publishing, AprilTag detection, and YOLO segmentation nodes. Subscribes to `/oakd_pro/rgb/image`.
+  </Card>
+  <Card title="colman_moveit_config" icon="gear" href="/packages/colman-moveit-config">
+    MoveIt 2 configuration: SRDF, OMPL pipeline, kinematics (trac-ik), and `moveit_py.yaml`.
+  </Card>
+  <Card title="gripper_description" icon="hand-grab" href="/packages/colman-description">
+    Xacro macros for the vacuum gripper geometry and ros2_control hardware interface.
+  </Card>
+  <Card title="gripper_gazebo" icon="box" href="/packages/colman-description">
+    Gazebo plugins and materials for vacuum gripper simulation.
+  </Card>
+  <Card title="oakd_description" icon="camera" href="/packages/colman-description">
+    URDF description for the OAK-D Pro camera, including the wrist mount transform.
+  </Card>
+  <Card title="oakd_gazebo" icon="camera" href="/packages/colman-description">
+    Gazebo sensor plugins for simulating OAK-D RGB and depth output.
+  </Card>
+</CardGroup>
+
+## Hardware
+
+The Colman platform consists of:
+
+- **Universal Robots UR3e** — 6-DOF collaborative arm reachable at `192.168.56.101` on the lab LAN
+- **Vacuum gripper** — digital output controlled via the UR IO interface (`/io_and_status_controller/set_io`)
+- **Luxonis OAK-D Pro** — wrist-mounted RGB-D camera; accessed through the DepthAI SDK and published as ROS 2 topics under `/oakd_pro/`
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, build with Pixi, and run your first demo in minutes.
+  </Card>
+  <Card title="Environment setup" icon="wrench" href="/setup/environment">
+    Full instructions for installing Pixi and preparing your development machine.
+  </Card>
+  <Card title="Hardware setup" icon="microchip" href="/setup/hardware">
+    Connect and configure the UR3e, OAK-D camera, and vacuum gripper.
+  </Card>
+  <Card title="Simulation setup" icon="box" href="/setup/simulation">
+    Run demos against mock hardware without a physical robot.
+  </Card>
+</CardGroup>

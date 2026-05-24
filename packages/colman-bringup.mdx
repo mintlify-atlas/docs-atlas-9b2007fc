@@ -1,0 +1,154 @@
+---
+title: "colman_bringup: composable launch files for the UR3e"
+description: "ROS 2 launch files for the Colman UR3e: controllers, robot state publisher, Gazebo, MoveIt 2, YOLO, and AprilTag nodes with configurable gripper and camera."
+---
+
+The `colman_bringup` package is the top-level entry point for starting the Colman robotic arm system. It provides a set of composable launch files that you can invoke individually or together through `colman.launch.py`, which orchestrates bringup, simulation, MoveIt 2, depth processing, YOLO detection, and AprilTag detection as opt-in subsystems.
+
+## Launch files
+
+<AccordionGroup>
+  <Accordion title="bringup.launch.py — Core controller bringup">
+    The foundational bringup file. It starts `robot_state_publisher` (loading the correct URDF via `xacro` with `gripper_type` and `use_camera` mappings), conditionally starts `ros2_control_node` / `controller_manager` when `start_external_rm` is `true`, and spawns three controllers:
+
+    - `joint_state_broadcaster` — publishes `/joint_states`
+    - `joint_trajectory_controller` — arm trajectory execution
+    - `gripper_controller` or `robotiq_gripper_controller` — selected by `gripper_type`
+
+    When `use_sim_time` is `true`, the URDF is loaded from `colman_gazebo` instead of `colman_description` so the Gazebo-compatible XACRO is used.
+
+    ```bash
+    ros2 launch colman_bringup bringup.launch.py \
+      gripper_type:=custom \
+      use_camera:=true \
+      use_sim_time:=false \
+      start_external_rm:=false
+    ```
+  </Accordion>
+
+  <Accordion title="colman.launch.py — Full system bringup">
+    The all-in-one launcher that composes every subsystem. It includes `bringup.launch.py` unconditionally and then conditionally includes the following launch files based on boolean arguments:
+
+    | Argument   | Default | Included launch file    |
+    |------------|---------|-------------------------|
+    | `sim`      | `true`  | `sim.launch.py`         |
+    | `moveit`   | `true`  | `moveit.launch.py`      |
+    | `depth`    | `false` | `depth.launch.py`       |
+    | `yolo`     | `false` | `yolo.launch.py`        |
+    | `apriltag` | `false` | `apriltag.launch.py`    |
+
+    The `use_sim_time` parameter forwarded to `bringup.launch.py` and `moveit.launch.py` is driven by the `sim` argument, so toggling simulation automatically updates the clock source.
+
+    ```bash
+    # Simulation with MoveIt 2 and AprilTag detection
+    ros2 launch colman_bringup colman.launch.py \
+      sim:=true moveit:=true apriltag:=true gripper_type:=custom
+
+    # Real robot, no sim, with YOLO
+    ros2 launch colman_bringup colman.launch.py \
+      sim:=false moveit:=true yolo:=true gripper_type:=vacuum
+    ```
+  </Accordion>
+
+  <Accordion title="rsp.launch.py — Robot state publisher only">
+    A standalone `robot_state_publisher` launch file intended for use with the real UR3e driver. It passes through all `ur_robot_driver` connection parameters to `xacro`, including `robot_ip`, `ur_type`, `tf_prefix`, `headless_mode`, and the UR script/recipe file paths resolved from `ur_client_library` and `ur_robot_driver`.
+
+    ```bash
+    ros2 launch colman_bringup rsp.launch.py \
+      robot_ip:=192.168.1.102 \
+      ur_type:=ur3e \
+      gripper_type:=vacuum \
+      use_camera:=false
+    ```
+  </Accordion>
+
+  <Accordion title="sim.launch.py — Gazebo Harmonic simulation">
+    Launches Gazebo Harmonic with a configurable world file (defaults to `table_world.sdf` from `colman_gazebo`), spawns the robot from the `/robot_description` topic at a configurable Z height (`spawn_z`, default `0.76619` m for the table world), and starts the `ros_gz_bridge` clock bridge using `bridge_config.yaml` from `colman_gazebo`.
+
+    ```bash
+    ros2 launch colman_bringup sim.launch.py \
+      world:=/path/to/custom.sdf \
+      spawn_z:=0.76619
+    ```
+  </Accordion>
+
+  <Accordion title="moveit.launch.py — MoveIt 2 move_group">
+    Dispatches to either `colman_moveit_custom.launch.py` or `colman_moveit_robotiq.launch.py` inside `colman_moveit_config` based on the `gripper_type` argument. Both variants start a `move_group` node and optionally an RViz2 node with the pre-configured `moveit.rviz` file.
+
+    ```bash
+    ros2 launch colman_bringup moveit.launch.py \
+      gripper_type:=robotiq \
+      use_camera:=true \
+      use_sim_time:=false
+    ```
+  </Accordion>
+
+  <Accordion title="apriltag.launch.py — AprilTag detector">
+    Starts an `apriltag_ros` `apriltag_node` with its parameters loaded from `colman_perception/config/apriltag.yaml` (overridable via `params_file`). The node remaps its inputs to the OAK-D Pro topics:
+
+    - `image_rect` → `/oakd_pro/rgb/image`
+    - `camera_info` → `/oakd_pro/rgb/camera_info`
+
+    ```bash
+    ros2 launch colman_bringup apriltag.launch.py
+    # or with a custom config:
+    ros2 launch colman_bringup apriltag.launch.py \
+      params_file:=/path/to/apriltag.yaml
+    ```
+  </Accordion>
+
+  <Accordion title="yolo.launch.py — YOLO detection node">
+    Starts the `detection` executable from `colman_perception`, which runs YOLO11 instance segmentation on incoming camera frames and publishes annotated images to `/yolo/annotated`.
+
+    ```bash
+    ros2 launch colman_bringup yolo.launch.py
+    ```
+  </Accordion>
+
+  <Accordion title="depth.launch.py — Stereo depth pipeline">
+    Builds a stereo depth pipeline on top of the OAK-D Pro left/right image streams. It starts:
+
+    1. `camera_info_republisher` — injects the stereo baseline (`baseline_m`, default `0.075` m) into the projection matrix `P[3]` and corrects frame IDs before passing camera info to downstream nodes
+    2. `left_rectify` / `right_rectify` — `image_proc/rectify_node` nodes on each stereo channel
+    3. `disparity` — `stereo_image_proc/disparity_node` (SGM, range 128, approximate sync)
+    4. `point_cloud` — `stereo_image_proc/point_cloud_node` publishing to `/oakd_pro/depth/points2`
+
+    ```bash
+    ros2 launch colman_bringup depth.launch.py \
+      baseline_m:=0.075 \
+      enable_pointcloud:=true
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Launch arguments reference
+
+The most commonly used arguments across the launch files are summarised below.
+
+| Argument             | Type    | Default    | Description                                                        |
+|----------------------|---------|------------|--------------------------------------------------------------------|
+| `gripper_type`       | string  | `custom`   | Gripper model. Valid values: `custom`, `robotiq`, `vacuum`.        |
+| `use_camera`         | bool    | `true`     | Attach the OAK-D Pro camera link to the URDF and SRDF.             |
+| `use_sim_time`       | bool    | `false`    | Use `/clock` from Gazebo instead of wall time.                     |
+| `start_external_rm`  | bool    | `false`    | Start an external `ros2_control_node`. Set `false` when using Gazebo or the UR driver's built-in controller manager. |
+| `sim`                | bool    | `true`     | (`colman.launch.py` only) Include Gazebo simulation.               |
+| `moveit`             | bool    | `true`     | (`colman.launch.py` only) Include MoveIt 2 move_group.             |
+| `depth`              | bool    | `false`    | (`colman.launch.py` only) Include stereo depth pipeline.           |
+| `yolo`               | bool    | `false`    | (`colman.launch.py` only) Include YOLO detection node.             |
+| `apriltag`           | bool    | `false`    | (`colman.launch.py` only) Include AprilTag detector.               |
+
+<Note>
+When using `colman.launch.py` with `sim:=true`, the `use_sim_time` flag is automatically propagated to both `bringup.launch.py` and `moveit.launch.py`, so you do not need to set it separately.
+</Note>
+
+## Dependencies
+
+`colman_bringup` depends on the following packages at runtime:
+
+- `xacro`, `robot_state_publisher` — robot description processing
+- `controller_manager` — ros2_control spawning
+- `ros_gz_sim`, `ros_gz_bridge` — Gazebo integration
+- `colman_description`, `colman_gazebo` — robot models and worlds
+- `colman_perception` — camera and detection nodes
+- `colman_moveit_config` — MoveIt 2 configuration
+- `rviz2` — visualisation

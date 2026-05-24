@@ -1,0 +1,76 @@
+---
+title: "ROS 2 topics, services, and TF coordinate frames reference"
+description: "All ROS 2 topics, services, and TF frames used by the ARM Demos nodes: message types, publish rates, publisher and subscriber nodes, and the TF frame hierarchy."
+---
+
+The ARM Demos suite communicates through a set of well-defined ROS 2 topics, services, and TF frames. Understanding these interfaces lets you integrate additional nodes, debug data flow with `ros2 topic echo`, or call services directly with `ros2 service call`. All nodes run in the default namespace unless otherwise noted.
+
+## Topics
+
+### Published topics
+
+| Topic | Message type | Publisher node | Rate | Details |
+|-------|-------------|----------------|------|---------|
+| `/oakd_pro/rgb/image` | `sensor_msgs/Image` | `CameraPublisher` | 30 Hz | 1280 × 720 RGB frames captured from the OAK-D Pro wrist camera. Encoding: `bgr8`. Frame ID: `oakd_pro_camera_rgb_optical_frame_wrist`. QoS: sensor data profile. |
+| `/oakd_pro/rgb/camera_info` | `sensor_msgs/CameraInfo` | `CameraPublisher` | 30 Hz | Intrinsic calibration matrix sourced directly from the OAK-D Pro on-device calibration. Distortion model: `plumb_bob` with zero coefficients (undistorted output). Stamped with the same timestamp as the paired image message. |
+| `/yolo/annotated` | `sensor_msgs/Image` | `DetectionNode` | 20 Hz | RGB image with YOLO instance-segmentation annotations drawn by `ultralytics`. Driven by a 0.05 s timer; publishes only when an image has been received from `/oakd_pro/rgb/image`. Encoding: `bgr8`. |
+
+### Subscribed topics
+
+| Topic | Message type | Subscriber node | Purpose |
+|-------|-------------|-----------------|---------|
+| `/oakd_pro/rgb/image` | `sensor_msgs/Image` | `DetectionNode` | Receives raw camera frames for YOLO inference. The latest frame is cached and processed on the 20 Hz detection timer. |
+
+<Note>
+The `CameraInfoRepublisher` node additionally subscribes to `/oakd_pro/left/camera_info` and `/oakd_pro/right/camera_info`, and republishes calibrated stereo info to `/oakd_pro/left/camera_info_calibrated` and `/oakd_pro/right/camera_info_calibrated`. It is not launched by default but is available in the `colman_perception` package.
+</Note>
+
+## Services
+
+| Service | Type | Provider node | Description |
+|---------|------|---------------|-------------|
+| `/stop` | `std_srvs/Trigger` | `StopControl` (in both `arm_demo` and `pick_and_place`) | Immediately halts trajectory execution by calling `stop_execution(auto_clear=True)` on the MoveIt trajectory execution manager, and sets an internal stop event that prevents new motions. Returns `success=true` with message `"Stopped"` (arm_demo) or `"Successfully Stopped"` (pick_and_place). |
+| `/io_and_status_controller/set_io` | `ur_msgs/SetIO` | UR ROS 2 driver (client in `VacuumControl`) | Controls digital I/O on the UR controller. The `VacuumControl` node calls this service with `fun=FUN_SET_DIGITAL_OUT=1`, `pin=0` to toggle the vacuum gripper on and off. |
+
+### Calling the stop service
+
+You can trigger an emergency stop from the command line at any time:
+
+```bash
+ros2 service call /stop std_srvs/srv/Trigger
+```
+
+### Calling the vacuum service
+
+Toggle the vacuum on (state `1.0`) or off (state `0.0`):
+
+```bash
+# Turn vacuum on
+ros2 service call /io_and_status_controller/set_io ur_msgs/srv/SetIO \
+  "{fun: 1, pin: 0, state: 1.0}"
+
+# Turn vacuum off
+ros2 service call /io_and_status_controller/set_io ur_msgs/srv/SetIO \
+  "{fun: 1, pin: 0, state: 0.0}"
+```
+
+<Warning>
+The `/io_and_status_controller/set_io` service is only available when the UR robot driver is running and connected to the robot. It is not available in mock hardware mode.
+</Warning>
+
+## TF frames
+
+The following coordinate frames are relevant across the ARM Demos nodes. All frames are expressed relative to `base_link` in the TF tree.
+
+| Frame | Description |
+|-------|-------------|
+| `base_link` | Root frame of the robot. All Cartesian pose goals in `go_to_pose` are expressed in this frame. |
+| `tool0` | End-effector tool flange as defined in the UR URDF. Used as the `pose_link` in `arm_demo.py`. |
+| `vacuum_tip_link` | Tip of the vacuum gripper. Used as the `pose_link` in `pick_and_place.py` so that Cartesian goals target the vacuum cup rather than the flange. |
+| `oakd_pro_camera_rgb_optical_frame_wrist` | Optical frame of the wrist-mounted OAK-D Pro RGB camera. All image and camera_info messages are stamped with this frame ID. |
+| `tag_1` | TF frame published by the AprilTag detector for tag ID 1. Used by `TagLookup.get_tag_pose()` in `pick_and_place.py` as the pick target. |
+| `tag_20` | TF frame for AprilTag ID 20. Used during eye-in-hand calibration to relate the camera to the robot base. |
+
+<Tip>
+To inspect live TF data, run `ros2 run tf2_tools view_frames` while the robot driver and bringup nodes are active. The resulting PDF shows the full frame tree including all AprilTag frames when the detector is running.
+</Tip>

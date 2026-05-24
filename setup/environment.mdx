@@ -1,0 +1,96 @@
+---
+title: "Set up the arm-demos ROS 2 development environment"
+description: "Install Pixi and configure the arm-demos workspace on Linux x86_64. ROS 2 Jazzy, MoveIt 2, and Python packages are managed automatically by Pixi."
+---
+
+The arm-demos project uses [Pixi](https://prefix.dev/docs/pixi/installation) to manage the entire dependency tree, including ROS 2 Jazzy, MoveIt 2, and Python packages. You do not need to install ROS 2 separately or source any system-level ROS setup files; Pixi resolves and installs everything into an isolated, reproducible environment tied to the workspace. The only requirement is a **Linux x86\_64** machine, as declared by `platforms = ["linux-64"]` in `pixi.toml`.
+
+## Prerequisites
+
+- Linux x86\_64 host (native or WSL2)
+- Git
+- Internet access for the first `pixi install`
+
+## Key dependencies
+
+Pixi installs the following packages automatically when you run `pixi install`:
+
+| Package | Version | Purpose |
+|---|---|---|
+| `python` | 3.12 | Runtime for all demo scripts |
+| `ros-jazzy-desktop` | 0.11 | Full ROS 2 Jazzy desktop stack |
+| `ros-jazzy-moveit` | 2.12 | MoveIt 2 motion planning framework |
+| `ros-jazzy-moveit-py` | 2.12 | Python bindings for MoveIt 2 |
+| `ros-jazzy-ur` | 3.7 | Universal Robots ROS 2 driver |
+| `opencv-python` | latest | Computer vision (PyPI) |
+| `depthai` | latest | OAK-D camera SDK (PyPI) |
+| `mediapipe` | latest | Hand landmark detection (PyPI) |
+
+<Note>
+`opencv-python`, `depthai`, and `mediapipe` are declared under `[pypi-dependencies]` and installed via pip inside the Pixi environment. No system-level pip or virtualenv setup is required.
+</Note>
+
+## IDE support
+
+The environment includes `debugpy` for VS Code's Python debugger, `isort` for import sorting, and `uv` for the `ms-python.vscode-python-envs` extension. Point your VS Code Python interpreter to the Pixi environment (`pixi shell --print-activate-command` can help locate the prefix).
+
+## Shell activation
+
+When you open a `pixi shell`, Pixi automatically sources `install/setup.sh`, which overlays the built ROS 2 workspace on top of the base Pixi environment. This means all `ros2` commands and custom packages are available immediately after the shell starts.
+
+```bash
+# Interactive shell with full environment
+pixi shell
+
+# Or prefix individual commands without entering the shell
+pixi run ros2 topic list
+```
+
+## OAK-D viewer environment
+
+The `oak-viewer` Pixi environment is a separate, self-contained environment for running the Luxonis OAK Viewer GUI. It does not activate the default feature set and instead sets up its own library paths. On WSL2, it also includes a PowerShell helper to forward the USB device from Windows.
+
+```bash
+# Install the oak-viewer environment (downloads and unpacks the Luxonis viewer deb)
+pixi run --environment oak-viewer install-oak
+
+# Launch the viewer
+pixi run --environment oak-viewer oak-viewer
+```
+
+## Setup steps
+
+<Steps>
+  <Step title="Install Pixi">
+    Follow the [Pixi installation guide](https://prefix.dev/docs/pixi/installation) for your platform. The recommended method is:
+
+    ```bash
+    curl -fsSL https://pixi.sh/install.sh | sh
+    ```
+
+    Restart your shell after installation so the `pixi` binary is on your `PATH`.
+  </Step>
+
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/MRRP-lab/arm-demos.git
+    cd arm-demos
+    ```
+  </Step>
+
+  <Step title="Install all dependencies">
+    ```bash
+    pixi install
+    ```
+
+    Pixi reads `pixi.toml`, resolves the full dependency graph (conda + PyPI), and downloads packages. This may take several minutes on first run.
+  </Step>
+
+  <Step title="Build the ROS 2 workspace">
+    ```bash
+    pixi run build
+    ```
+
+    This runs `colcon build --symlink-install` over the `src/` directory and produces the `install/` tree. The `install/setup.sh` sourced on activation comes from this step, so you must build before launching any node.
+  </Step>
+</Steps>

@@ -1,0 +1,84 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "ARM Demos",
+  "projectDescription": "A ROS 2 robotics demo suite for the Colman UR3e robotic arm, featuring hand-gesture control via MediaPipe, vision-based pick-and-place with YOLO and AprilTag detection, and eye-in-hand camera calibration.",
+  "theme": "aspen",
+  "primaryColor": "#2563EB",
+  "lightColor": "#DBEAFE",
+  "darkColor": "#1E3A5F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Setup",
+            "pages": [
+              "setup/environment",
+              "setup/hardware",
+              "setup/simulation"
+            ]
+          },
+          {
+            "group": "Demos",
+            "pages": [
+              "demos/hand-tracking",
+              "demos/pick-and-place",
+              "demos/eye-in-hand-calibration"
+            ]
+          },
+          {
+            "group": "Packages",
+            "pages": [
+              "packages/colman-bringup",
+              "packages/colman-description",
+              "packages/colman-motion",
+              "packages/colman-perception",
+              "packages/colman-moveit-config"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/launch-tasks",
+              "reference/ros-topics",
+              "reference/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Hand gesture-controlled robotic arm using MediaPipe hand landmark detection and OAK-D camera",
+    "Vision-based pick-and-place with AprilTag pose estimation and vacuum gripper control",
+    "Eye-in-hand camera calibration using multiple OpenCV hand-eye solving methods",
+    "MoveIt 2 motion planning with OMPL and TracIK kinematics plugin",
+    "Pixi-based reproducible ROS 2 Jazzy environment on Linux",
+    "Gazebo simulation support with mock hardware mode",
+    "YOLO object detection node for real-time segmentation via OAK-D Pro camera"
+  ],
+  "publicApiSurface": [
+    "ros2 launch arm_demo arm_demo.launch.py gripper_type:=vacuum use_camera:=false",
+    "ros2 launch colman_motion pick_and_place.launch.py gripper_type:=vacuum",
+    "pixi run build",
+    "pixi run launch",
+    "pixi run sim",
+    "/stop (ROS 2 Trigger service — stops robot trajectory execution)",
+    "go_to_pose(ur, arm, logger, x, y, z, qx, qy, qz, qw, params, stop_event)",
+    "go_to_joint_pose(ur, arm, logger, joint_values, params, stop_event)",
+    "VacuumControl.set_digital_out(pin, state)",
+    "TagLookup.get_tag_pose(tag_frame, base_frame)",
+    "SceneManager.add_box(obj_id, frame_id, dims, pos)",
+    "EyeInHandCalibration (ROS 2 node — interactive hand-eye calibration data collector)",
+    "DetectionNode (ROS 2 node — YOLO segmentation, publishes to /yolo/annotated)",
+    "CameraPublisher (ROS 2 node — DepthAI OAK-D publisher to /oakd_pro/rgb/image)"
+  ]
+}

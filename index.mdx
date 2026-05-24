@@ -1,133 +1,52 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "ARM Demos: ROS 2 robot arm demo suite for the UR3e"
+description: "ARM Demos is a ROS 2 demo suite for the Colman UR3e robotic arm, with hand gesture control, vision-based pick-and-place, and camera calibration tools."
 ---
 
-## Setting up
+ARM Demos is a collection of ROS 2 (Jazzy) applications for the **Colman** UR3e robotic arm platform. The suite demonstrates real-time hand gesture control via MediaPipe and OAK-D, vision-guided pick-and-place using AprilTag detection and a vacuum gripper, and eye-in-hand camera calibration workflows. All packages are managed with [Pixi](https://prefix.dev) for fully reproducible environments on Linux.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn what ARM Demos includes and how the packages fit together.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, build the workspace, and run your first demo in minutes.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Environment setup" icon="wrench" href="/setup/environment">
+    Install Pixi, set up the ROS 2 Jazzy workspace, and prepare your development environment.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Hardware setup" icon="microchip" href="/setup/hardware">
+    Connect the UR3e robot, OAK-D camera, and vacuum gripper for real robot operation.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Demos
 
-Everything you need to create world-class documentation.
+<CardGroup cols={3}>
+  <Card title="Hand tracking" icon="hand" href="/demos/hand-tracking">
+    Control the arm in real time using hand gestures detected by MediaPipe.
+  </Card>
+  <Card title="Pick and place" icon="robot" href="/demos/pick-and-place">
+    Autonomously pick objects located with AprilTag markers and vacuum gripper.
+  </Card>
+  <Card title="Eye-in-hand calibration" icon="camera" href="/demos/eye-in-hand-calibration">
+    Calibrate the wrist-mounted OAK-D camera relative to the end-effector.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Packages
 
-## Make your content agent ready
-
-Make your docs work for humans and AI agents alike.
-
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
+<CardGroup cols={2}>
+  <Card title="colman_bringup" icon="play" href="/packages/colman-bringup">
+    Launch files and bringup configurations for the full robot stack.
   </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
+  <Card title="colman_motion" icon="arrows-up-down-left-right" href="/packages/colman-motion">
+    MoveIt 2 motion planning nodes for pick-and-place and hand-eye calibration.
   </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
+  <Card title="colman_perception" icon="eye" href="/packages/colman-perception">
+    Camera publishing, AprilTag detection, and YOLO object segmentation nodes.
   </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
+  <Card title="colman_description" icon="cube" href="/packages/colman-description">
+    URDF/Xacro robot description files and controller configurations.
   </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+</CardGroup>

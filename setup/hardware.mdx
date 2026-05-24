@@ -1,0 +1,115 @@
+---
+title: "Connect and configure the UR3e, gripper, and camera"
+description: "Set up the UR3e robot arm, vacuum gripper, and OAK-D Pro wrist camera for real-robot operation, including network config, udev rules, and safety checks."
+---
+
+Running arm-demos on physical hardware requires three components to be connected and configured before you launch: the UR3e arm over a local Ethernet network, a vacuum gripper wired to the robot's digital I/O, and an OAK-D Pro camera attached via USB. Each component has its own setup step, and none of them depend on each other, so you can work through them in parallel if you have the hardware available.
+
+<Warning>
+Always keep an emergency stop (e-stop) accessible and within reach whenever the UR3e is powered and the driver is running. The arm will execute planned trajectories without further confirmation.
+</Warning>
+
+## UR3e robot arm
+
+The robot driver connects to the UR3e over a LAN interface. The default robot IP expected by the `launch-lan` task is `192.168.56.101`.
+
+### Network configuration
+
+Configure the network interface on your workstation with a static IP on the same subnet as the robot (for example, `192.168.56.1/24`). On the robot's teach pendant, navigate to **Settings → System → Network** and set:
+
+| Field | Value |
+|---|---|
+| IP address | `192.168.56.101` |
+| Subnet mask | `255.255.255.0` |
+| Default gateway | `192.168.56.1` |
+
+Verify connectivity before launching:
+
+```bash
+ping 192.168.56.101
+```
+
+### External control URCap
+
+The UR robot driver requires the **External Control URCap** to be installed and active on the pendant. Load the `external_control.urp` program on the pendant and start it before running `pixi run launch` (or `pixi run run`). The driver will wait for the URCap to connect before accepting motion commands.
+
+<Note>
+The `launch-lan` task sets `headless_mode:=true` and `launch_dashboard_client:=false`. The driver communicates over the robot's primary interface port (30001) and RTDE port (30004) — make sure these are not blocked by a firewall.
+</Note>
+
+## Vacuum gripper
+
+The vacuum gripper is controlled by toggling **digital output pin 0** on the UR3e controller using the `ur_msgs/srv/SetIO` service. The `VacuumControl` node in `pick_and_place.py` calls `set_digital_out(0, ON)` to engage suction and `set_digital_out(0, OFF)` to release.
+
+Wire the vacuum solenoid valve so that it is driven by DO0 on the robot's tool I/O connector. Confirm the gripper actuates correctly with a manual test before running pick-and-place demos.
+
+## OAK-D Pro camera
+
+The OAK-D Pro is mounted at the wrist and connects to the host via USB 3. The `depthai` library communicates with the camera directly over USB, so no additional ROS driver package is required.
+
+### udev rule (Linux)
+
+By default, only root can access the OAK USB device. Add a udev rule so your user can open it without `sudo`:
+
+```bash
+echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"' | \
+  sudo tee /etc/udev/rules.d/80-movidius.rules && \
+  sudo udevadm control --reload-rules && \
+  sudo udevadm trigger
+```
+
+You can also run this through Pixi:
+
+```bash
+pixi run --environment oak-viewer setup-oak
+```
+
+Replug the camera after applying the rule to confirm it is visible to your user account.
+
+### WSL2 users
+
+USB devices are not automatically forwarded to WSL2. Use `usbipd` on the Windows host to bind and attach the OAK camera. The `connect-oak-wsl` task handles this automatically, polling for VID `03E7` and re-attaching whenever the camera's PID changes (which happens during firmware boot):
+
+```bash
+pixi run --environment oak-viewer connect-oak-wsl
+```
+
+This launches a PowerShell script with elevated privileges. Leave it running in a separate terminal for the duration of your session.
+
+<Tip>
+Install [usbipd-win](https://github.com/dorssel/usbipd-win) on the Windows host if it is not already present. The script requires `usbipd` to be on the Windows `PATH`.
+</Tip>
+
+## MediaPipe hand landmarker model
+
+The gesture-control demo requires a pre-trained MediaPipe hand landmarker model that is not included in the repository. Download it with:
+
+```bash
+pixi run download-mediapipe-model
+```
+
+This saves `hand_landmarker.task` to the current working directory. The demo nodes expect to find the file there at runtime.
+
+## AprilTag pick targets
+
+The pick-and-place demo uses AprilTag pose estimates as pick targets. **`tag_1`** is the default tag frame looked up by `VacuumControl.get_tag_pose()`. Print or fabricate a tag_1 marker from the `36h11` family and place it on the object or surface you want the arm to pick from.
+
+## Launch on real hardware
+
+Once the arm, gripper, and camera are configured:
+
+```bash
+pixi run launch
+```
+
+This is an alias for `pixi run launch-lan`, which builds the workspace if needed and then runs:
+
+```bash
+ros2 launch ur_robot_driver ur_control.launch.py \
+  ur_type:=ur3e \
+  robot_ip:=192.168.56.101 \
+  use_mock_hardware:=false \
+  headless_mode:=true \
+  launch_dashboard_client:=false \
+  gripper_type:=vacuum
+```

@@ -1,0 +1,103 @@
+---
+title: "colman_description: URDF model and ros2_control config"
+description: "URDF/Xacro robot description for the Colman UR3e arm with swappable gripper (custom, Robotiq 2F-85, or vacuum) and optional OAK-D Pro wrist camera."
+---
+
+The `colman_description` package contains the Xacro robot model and ros2_control controller configuration files for the Colman arm. It is the single source of truth for the robot's kinematic structure, inertial properties, and hardware interface parameters used by `robot_state_publisher`, the controller manager, and MoveIt 2.
+
+## Robot model
+
+### colman.urdf.xacro
+
+The top-level Xacro file that assembles the complete robot by composing upstream description packages. It accepts two parameters that control which links and hardware interfaces are included:
+
+<ParamField path="gripper_type" type="string" default="custom">
+  Selects the end-effector model and the corresponding ros2_control hardware interface.
+
+  | Value      | Gripper description source    | Controller config              |
+  |------------|-------------------------------|--------------------------------|
+  | `custom`   | `gripper_description`         | `gripper_controllers.yaml`     |
+  | `robotiq`  | `robotiq_description`         | `robotiq_controllers.yaml`     |
+  | `vacuum`   | `gripper_description` (vacuum tip) | `gripper_controllers.yaml` |
+</ParamField>
+
+<ParamField path="use_camera" type="bool" default="true">
+  When `true`, the OAK-D Pro depth camera model from `oakd_description` is attached to the wrist link. Set to `false` for configurations without the camera.
+</ParamField>
+
+The Xacro also threads through all `ur_robot_driver` connection parameters (`robot_ip`, `ur_type`, `tf_prefix`, `use_mock_hardware`, `headless_mode`, script ports, etc.) to the upstream `ur_description` macro so a single file covers both real hardware and mock/simulation modes.
+
+<Note>
+In simulation the bringup uses `colman_gazebo/urdf/colman_gazebo.xacro` instead of this file, which adds Gazebo-specific plugins. The two files share the same Xacro parameters so launch arguments are identical.
+</Note>
+
+## Controller configuration
+
+### gripper_controllers.yaml
+
+Used when `gripper_type` is `custom` or `vacuum`. Configures `controller_manager` at 1000 Hz and defines four controllers:
+
+| Controller                    | Type                                                      |
+|-------------------------------|-----------------------------------------------------------|
+| `joint_state_broadcaster`     | `joint_state_broadcaster/JointStateBroadcaster`           |
+| `joint_trajectory_controller` | `joint_trajectory_controller/JointTrajectoryController`   |
+| `forward_velocity_controller` | `velocity_controllers/JointGroupVelocityController`       |
+| `forward_position_controller` | `position_controllers/JointGroupPositionController`       |
+| `gripper_controller`          | `position_controllers/GripperActionController`            |
+
+The `joint_trajectory_controller` controls all six UR joints via position command interfaces, publishing joint state at 100 Hz. The `gripper_controller` drives the `servotodrivegear` joint.
+
+```yaml
+# excerpt: gripper_controller parameters
+gripper_controller:
+  ros__parameters:
+    default: true
+    joint: servotodrivegear
+    action_monitor_rate: 20.0
+    allow_stalling: false
+    stall_velocity_threshold: 0.001
+    stall_timeout: 1.0
+```
+
+### robotiq_controllers.yaml
+
+Used when `gripper_type` is `robotiq`. Identical arm controller definitions as above, but replaces `gripper_controller` with:
+
+| Controller                      | Type                                              |
+|---------------------------------|---------------------------------------------------|
+| `robotiq_gripper_controller`    | `position_controllers/GripperActionController`    |
+
+The Robotiq controller drives `robotiq_85_left_knuckle_joint` with a goal tolerance of `0.01` rad, max velocity `1.0` rad/s, and a 2 s stall timeout.
+
+```yaml
+# excerpt: robotiq_gripper_controller parameters
+robotiq_gripper_controller:
+  ros__parameters:
+    default: true
+    joint: robotiq_85_left_knuckle_joint
+    stall_timeout: 2.0
+    goal_tolerance: 0.01
+    max_velocity: 1.0
+```
+
+## Runtime usage
+
+`colman_description` does not expose any executables of its own. It is consumed by other packages:
+
+<CardGroup cols={2}>
+  <Card title="colman_bringup" icon="rocket">
+    `bringup.launch.py` and `rsp.launch.py` invoke `xacro` on `colman.urdf.xacro` and pass the result to `robot_state_publisher`. The controller YAML files are loaded by `ros2_control_node`.
+  </Card>
+  <Card title="colman_moveit_config" icon="gear">
+    `colman_moveit.urdf.xacro` inside `colman_moveit_config` wraps this description (without the `ur_robot_driver` hardware interfaces) to produce a model suitable for `move_group`.
+  </Card>
+</CardGroup>
+
+## External dependencies
+
+The package composes its URDF from these upstream description packages:
+
+- `ur_description` — UR3e kinematic chain and meshes
+- `robotiq_description` — Robotiq 2F-85 gripper model
+- `oakd_description` — OAK-D Pro camera link and visuals
+- `gripper_description` — custom parallel gripper and vacuum tip models

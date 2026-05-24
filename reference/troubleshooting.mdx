@@ -1,0 +1,270 @@
+---
+title: "Troubleshooting common ARM Demos setup and runtime issues"
+description: "Fixes for common ARM Demos problems: colcon build failures, OAK-D camera errors, hand-tracking issues, robot connection failures, and pick-and-place problems."
+---
+
+This page collects the most common problems encountered when setting up and running the ARM Demos project, along with their root causes and fixes. Issues are grouped by subsystem. If a problem is not listed here, check the ROS 2 node logs with `ros2 topic echo /rosout` or run `pixi run psgrep` to identify stale processes from a previous session.
+
+<AccordionGroup>
+
+<Accordion title="Build issues">
+
+**`colcon build` fails with a missing package error**
+
+You are likely running `colcon` outside the pixi environment, so the required ROS 2 packages are not on your `PATH` or `AMENT_PREFIX_PATH`.
+
+Fix: enter the pixi environment first, then build.
+
+```bash
+pixi shell
+colcon build --symlink-install
+```
+
+Or use the task directly without entering a shell:
+
+```bash
+pixi run build
+```
+
+---
+
+**setuptools version conflict**
+
+Some versions of `colcon` are incompatible with recent setuptools releases. The `pixi.toml` pins `setuptools==79.0.1` to avoid this. If you see a conflict, ensure you are using the pinned environment and have not overridden setuptools with a manual `pip install`.
+
+```bash
+pixi run clean
+pixi run build
+```
+
+---
+
+**CMake build fails with missing `make` or compiler**
+
+The `make` and `compilers` packages are declared as dependencies in `pixi.toml` and are installed automatically into the pixi environment. If CMake reports that a compiler is missing, you may be running outside the pixi environment or the environment is corrupted.
+
+```bash
+pixi install   # re-installs all dependencies
+pixi run build
+```
+
+</Accordion>
+
+<Accordion title="Camera issues">
+
+**OAK-D camera not found**
+
+The OAK-D Pro requires a udev rule so non-root users can access the USB device. Without it, `depthai` raises a device-not-found error at startup.
+
+```bash
+pixi run --environment oak-viewer setup-oak
+```
+
+This writes `/etc/udev/rules.d/80-movidius.rules` and reloads udev. You need `sudo` access. Reconnect the camera after running the command.
+
+---
+
+**OAK-D camera not accessible in WSL**
+
+USB devices are not automatically forwarded into WSL 2. You must attach the device using `usbipd`.
+
+```bash
+pixi run --environment oak-viewer connect-oak-wsl
+```
+
+This runs the bundled PowerShell script that calls `usbipd` to attach the OAK-D camera into the current WSL session.
+
+---
+
+**`CameraPublisher` node not publishing**
+
+Check the following in order:
+
+1. Confirm the USB cable is connected and the camera LED is on.
+2. Verify that the `depthai` Python package is installed in the pixi environment:
+
+   ```bash
+   pixi run python -c "import depthai; print(depthai.__version__)"
+   ```
+
+3. Check that udev rules are in place (see above).
+4. Review the node log for a `dai.Device()` initialization error:
+
+   ```bash
+   ros2 topic echo /rosout
+   ```
+
+</Accordion>
+
+<Accordion title="Hand tracking issues">
+
+**`hand_landmarker.task` not found**
+
+The MediaPipe hand landmarker model is not bundled with the repository and must be downloaded separately. Run the following from the project root:
+
+```bash
+pixi run download-mediapipe-model
+```
+
+This places `hand_landmarker.task` in the current directory, which is where `arm_demo.py` expects to find it (`MODEL_PATH = "hand_landmarker.task"`).
+
+<Warning>
+Always run this command from the project root. Running it from a different directory places the file in the wrong location and the node will still fail to start.
+</Warning>
+
+---
+
+**MediaPipe error during detection**
+
+MediaPipe requires valid RGB frames in video mode. If the camera is not publishing or frames are arriving in an unexpected encoding, `HandLandmarker.detect_for_video` will raise an exception.
+
+Check that the OAK-D camera is publishing before starting the arm demo:
+
+```bash
+ros2 topic hz /oakd_pro/rgb/image
+```
+
+If no messages appear, resolve the camera issue first (see "Camera issues" above).
+
+---
+
+**Robot not moving during hand tracking**
+
+The arm demo uses a background worker thread to execute motion plans. If the robot is not responding to hand movements, check the following:
+
+1. Confirm MoveIt is running and connected: `ros2 node list | grep move_group`
+2. Check whether `/stop` was triggered (intentionally or by a prior crash):
+
+   ```bash
+   ros2 service call /stop std_srvs/srv/Trigger
+   ```
+
+   The stop event is sticky. Restarting `arm_demo` resets it.
+3. Look for planning failures in the node output — a consistent planning failure may indicate a misconfigured collision scene or an unreachable pose.
+
+</Accordion>
+
+<Accordion title="Robot connection issues">
+
+**Cannot connect to the robot**
+
+The LAN launch task targets `192.168.56.101`. Ensure:
+
+- The robot controller is powered on and the network cable is connected.
+- Your host machine's network interface is configured on the `192.168.56.0/24` subnet.
+- The robot is in **Remote Control** mode (set on the teach pendant under Installation → URCaps → External Control).
+
+```bash
+ping 192.168.56.101
+```
+
+---
+
+**UR driver fails to start**
+
+If the driver exits immediately or logs a connection error, check that:
+
+1. The robot is not in a fault or protective-stop state. Clear faults on the teach pendant.
+2. The dashboard is reachable. The driver connects to the dashboard port (29999) even when `launch_dashboard_client` is `false`.
+3. No other process is already connected to the robot on port 30001 (primary interface). Check with `pixi run psgrep`.
+
+---
+
+**Vacuum gripper not activating**
+
+The `VacuumControl` node calls `/io_and_status_controller/set_io`. If the service is not available, the node will block on `vacuum.vacuum.wait_for_service()` at startup.
+
+```bash
+ros2 service list | grep set_io
+```
+
+If the service is absent, the UR ROS 2 driver is not running or has not finished initializing. Start the robot driver first with `pixi run launch` (or `pixi run sim` for testing), then launch the demo.
+
+</Accordion>
+
+<Accordion title="Pick and place issues">
+
+**Tag lookup returns `None`**
+
+`TagLookup.get_tag_pose()` returns `None` when the AprilTag transform cannot be found in the TF buffer. This means either:
+
+- AprilTag ID `tag_1` is not visible to the wrist camera. Ensure the tag is within the camera's field of view and well lit.
+- The AprilTag detector node is not running. Confirm it is in your launch file and started without errors.
+
+```bash
+ros2 run tf2_ros tf2_echo base_link tag_1
+```
+
+If this command times out, the detector is not publishing the transform.
+
+---
+
+**Tag is unstable and gets rejected**
+
+`get_tag_pose()` takes two readings 1 second apart and rejects the result if any axis differs by more than 3 mm between readings. This prevents acting on a tag that is still moving or vibrating.
+
+Ensure that:
+- The physical tag is stationary and not taped to a moving object.
+- The robot is in its observation pose before the tag lookup — any arm vibration during movement can cause the camera to see the tag shift.
+- Camera frame rate is sufficient; at very low brightness the OAK-D may drop frames and produce stale TF data.
+
+---
+
+**Robot stops unexpectedly during pick and place**
+
+The `/stop` service is triggered somewhere in the execution flow. Inspect the `stop_service` node log:
+
+```bash
+ros2 topic echo /rosout
+```
+
+Look for `"Stop activated"` messages. Common causes include:
+- An explicit `ros2 service call /stop` from another terminal.
+- A planning failure after three retries — `plan_and_execute` returns `False`, and `main()` calls `return` which exits the loop.
+- A timeout or exception in MoveIt planning.
+
+If planning is consistently failing, switch to mock hardware (`pixi run sim`) to isolate whether the issue is connectivity or motion planning.
+
+</Accordion>
+
+<Accordion title="Simulation issues">
+
+**Gazebo not launching**
+
+Gazebo is included via the `ros-jazzy-desktop` package declared in `pixi.toml`. If Gazebo is missing, the pixi environment may be incomplete.
+
+```bash
+pixi install
+pixi run sim
+```
+
+If Gazebo still does not launch, check whether `gazebo` is on your PATH inside the pixi environment:
+
+```bash
+pixi shell
+which gazebo
+```
+
+---
+
+**MoveIt can't find robot state**
+
+MoveIt reads joint states from `joint_state_broadcaster`. If it reports that the robot state is unknown or planning fails immediately, the broadcaster may not be active.
+
+Check that the bringup launch is running and the controller is initialized:
+
+```bash
+ros2 topic echo /joint_states
+```
+
+If no messages appear, restart the bringup:
+
+```bash
+pixi run sim
+```
+
+Wait for the log line `"joint_state_broadcaster" activated successfully` before starting MoveIt or the demo nodes.
+
+</Accordion>
+
+</AccordionGroup>

@@ -1,0 +1,176 @@
+---
+title: "Autonomous pick-and-place using AprilTag detection"
+description: "Run a fully autonomous pick-and-place loop on the UR3e: the arm locates an object via AprilTag, picks it with vacuum, and drops it at a fixed position."
+---
+
+The pick-and-place demo runs an autonomous loop that finds an AprilTag-marked object, picks it up using the vacuum gripper, and deposits it at a fixed drop-off point. The arm repeats the cycle indefinitely until you trigger the `/stop` service or kill the process.
+
+## How it works
+
+### Pick-and-place cycle
+
+<Steps>
+  <Step title="Move to LOOK_ONE">
+    The arm moves to the `LOOK_ONE` joint pose — a position above the workspace that gives the wrist camera a clear view of the table.
+  </Step>
+  <Step title="Detect tag_1">
+    `TagLookup.get_tag_pose()` waits 1 second then takes two TF2 readings of `tag_1` relative to `base_link`. If the readings are more than 3 mm apart in any axis the result is discarded and the arm returns to `LOOK_ONE`.
+  </Step>
+  <Step title="Approach above the object">
+    The arm moves to the detected tag position with a +5 cm Z offset (`APPROACH_OFFSET = 0.05`) to clear the object before descending.
+  </Step>
+  <Step title="Descend and pick">
+    The arm moves straight down to the exact tag pose, then activates the vacuum gripper (digital output pin 0, ON).
+  </Step>
+  <Step title="Lift">
+    The arm rises back to the approach height (+5 cm above the pick point) while the vacuum holds the object.
+  </Step>
+  <Step title="Move to drop-off approach">
+    The arm moves to the fixed drop-off position with a +5 cm Z offset:
+
+    ```python
+    DROP_OFF = (0.2, -0.2, 0.0381)  # x, y, z in base_link metres
+    # Approach height = DROP_OFF[2] + APPROACH_OFFSET = 0.0881 m
+    ```
+  </Step>
+  <Step title="Lower and release">
+    The arm descends to `DROP_OFF` exactly, then deactivates the vacuum (digital output pin 0, OFF) to release the object.
+  </Step>
+  <Step title="Lift and repeat">
+    The arm rises to the drop-off approach height and the cycle restarts from step 1.
+  </Step>
+</Steps>
+
+### Key constants
+
+```python
+APPROACH_OFFSET = 0.05          # 5 cm safety clearance above pick and drop poses
+DROP_OFF        = (0.2, -0.2, 0.0381)   # fixed drop position in base_link (metres)
+EE_DOWN         = (1.0, 0.0, 0.0, 0.0) # end-effector quaternion (pointing straight down)
+```
+
+### Named joint poses
+
+These joint configurations are used for safe transit between workspace regions:
+
+```python
+UP = {
+    "elbow_joint": 0,
+    "shoulder_lift_joint": -1.57,
+    "shoulder_pan_joint": 0,
+    "wrist_1_joint": 0,
+    "wrist_2_joint": 1.59,
+    "wrist_3_joint": 0,
+}
+
+LOOK_ONE = {
+    "elbow_joint": -0.6769,
+    "shoulder_lift_joint": -1.4927,
+    "shoulder_pan_joint": 0,
+    "wrist_1_joint": -2.3952,
+    "wrist_2_joint": 1.6315,
+    "wrist_3_joint": 0,
+}
+
+LOOK_FOUR = {
+    "elbow_joint": -0.6769,
+    "shoulder_lift_joint": -1.4927,
+    "shoulder_pan_joint": -1.5708,
+    "wrist_1_joint": -2.3952,
+    "wrist_2_joint": 1.6315,
+    "wrist_3_joint": 0,
+}
+
+COMPACT = {
+    "elbow_joint": -2.2043,
+    "shoulder_lift_joint": -0.5901,
+    "shoulder_pan_joint": 0,
+    "wrist_1_joint": -0.3818,
+    "wrist_2_joint": 0,
+    "wrist_3_joint": 0,
+}
+```
+
+### Speed profiles
+
+All motion uses the OMPL planner. Two speed profiles are available:
+
+| Profile | Velocity scaling | Acceleration scaling | Used for |
+|---|---|---|---|
+| `slow` | 0.1 | 0.1 | All pick-and-place motions |
+| `fast` | 0.3 | 0.3 | Available for transit (not used by default) |
+
+### Tag stability check
+
+`TagLookup` rejects unstable detections before the arm commits to a pick:
+
+```python
+error_m = 0.003  # 3 mm
+wait_s  = 1.0
+
+first  = self.lookup(tag_frame, base_frame)
+time.sleep(wait_s)
+second = self.lookup(tag_frame, base_frame)
+
+if max(dx, dy, dz) >= error_m:
+    return None   # discard — tag is moving or detection is noisy
+```
+
+### Vacuum control
+
+`VacuumControl` calls the `/io_and_status_controller/set_io` service to toggle a digital output:
+
+```python
+# Activate vacuum (pick)
+vacuum.set_digital_out(pin=0, state=True)
+
+# Deactivate vacuum (release)
+vacuum.set_digital_out(pin=0, state=False)
+```
+
+The vacuum is always deactivated in the `finally` block to prevent the gripper from holding an object if the demo is interrupted.
+
+### Stop control
+
+The `StopControl` node exposes a `/stop` Trigger service. Calling it sets `stop_event`, which causes the main loop to exit cleanly at the next opportunity, and immediately cancels any in-progress trajectory execution.
+
+## Prerequisites
+
+<Info>
+  ColmanBringup must be running before you start this demo. It brings up the UR robot driver, `ros2_control`, and the AprilTag detection node that publishes TF frames for `tag_1`.
+</Info>
+
+<Warning>
+  Place an AprilTag 36h11 marker with ID `tag_1` on the object you want the arm to pick up, and ensure it is visible to the wrist camera when the arm is in the `LOOK_ONE` pose.
+</Warning>
+
+## Running the demo
+
+<Tabs>
+  <Tab title="pixi">
+    ```bash
+    pixi run demo-gripper
+    ```
+  </Tab>
+  <Tab title="ros2 launch">
+    ```bash
+    ros2 launch colman_motion pick_and_place.launch.py gripper_type:=vacuum
+    ```
+  </Tab>
+</Tabs>
+
+### Launch arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `gripper_type` | `vacuum` | Gripper model to load in the URDF (`vacuum` is the only supported type) |
+
+## Stopping the demo
+
+Call the `/stop` service from another terminal:
+
+```bash
+ros2 service call /stop std_srvs/srv/Trigger
+```
+
+The arm will finish its current motion segment, then the vacuum will be deactivated and the process will shut down cleanly.

@@ -1,0 +1,161 @@
+---
+title: "colman_moveit_config: MoveIt 2 config for the UR3e"
+description: "MoveIt 2 configuration for the Colman UR3e arm: TracIK kinematics, OMPL planning pipeline, SRDF planning groups and named states, and moveit_py settings."
+---
+
+The `colman_moveit_config` package holds all MoveIt 2 configuration files and launch files for the Colman arm. It was generated with the MoveIt Setup Assistant and subsequently extended to support multiple gripper types via Xacro conditionals. Every motion planning node in the project loads its configuration from this package using `MoveItConfigsBuilder`.
+
+## Planning group
+
+The primary planning group is `ur_arm`, defined as a kinematic chain from `base_link` to `tool0`:
+
+```xml
+<group name="ur_arm">
+    <chain base_link="base_link" tip_link="tool0"/>
+</group>
+```
+
+A second group, `gripper` (or `robotiq` depending on gripper type), is included for gripper actuation planning. When `gripper_type` is `custom`, an `endeffector` entry attaches the `gripper` group to `tool0`.
+
+## Named poses
+
+The SRDF defines the following named states for the `ur_arm` group. All motion demo nodes reference these states by name when calling `go_to_configured_pose`.
+
+| State name | Joint values (rad)                                                                           | Purpose                                 |
+|------------|----------------------------------------------------------------------------------------------|-----------------------------------------|
+| `Zero`     | All joints at 0                                                                              | All-zero reference pose                 |
+| `Up`       | `shoulder_lift=−1.57`, `wrist_2=1.59`, all others at 0                                      | Home / safe upright pose used by `pick_and_place` |
+| `Look1`    | `elbow=−0.677`, `shoulder_lift=−1.493`, `wrist_1=−2.395`, `wrist_2=1.632`                   | Camera looking down over quadrant 1     |
+| `Look2`    | Same as Look1, `shoulder_pan=+π/2`                                                           | Camera looking down over quadrant 2     |
+| `Look3`    | Same as Look1, `shoulder_pan=+π`                                                             | Camera looking down over quadrant 3     |
+| `Look4`    | Same as Look1, `shoulder_pan=−π/2`                                                           | Camera looking down over quadrant 4     |
+| `Compact`  | `elbow=−2.204`, `shoulder_lift=−0.590`, `wrist_1=−0.382`, all others at 0                   | Low-profile tucked pose                 |
+
+<Note>
+`"Up"` is the `HOME` constant in `pick_and_place.py`. After any emergency stop the demo returns to this pose before attempting the next pick cycle.
+</Note>
+
+## Kinematics
+
+The `ur_arm` group uses the TracIK solver, which provides better coverage of the UR3e's workspace near singularities compared to the default KDL solver.
+
+```yaml
+# config/kinematics.yaml
+ur_arm:
+  kinematics_solver: trac_ik_kinematics_plugin/TRAC_IKKinematicsPlugin
+  kinematics_solver_search_resolution: 0.005
+  kinematics_solver_timeout: 0.1
+  kinematics_solver_attempts: 5
+  solve_type: Distance
+```
+
+| Parameter                        | Value    | Notes                                              |
+|----------------------------------|----------|----------------------------------------------------|
+| `kinematics_solver`              | TracIK   | Requires `ros-jazzy-trac-ik-kinematics-plugin`     |
+| `kinematics_solver_timeout`      | 0.1 s    | Per-attempt IK timeout                             |
+| `kinematics_solver_attempts`     | 5        | Restarts with a different random seed on each fail |
+| `solve_type`                     | Distance | Minimises joint-space distance from current pose   |
+
+## Planning pipeline
+
+The default pipeline is OMPL, configured in `config/ompl_planning.yaml`. The `ur_arm` group defaults to `RRTConnect` with a 5-second planning budget at 10% velocity and acceleration scaling.
+
+```yaml
+# config/ompl_planning.yaml (excerpt)
+plan_request_params:
+  planning_attempts: 10
+  planning_pipeline: ompl
+  planning_time: 5.0
+  planner_id: "RRTConnectkConfigDefault"
+  max_velocity_scaling_factor: 0.1
+  max_acceleration_scaling_factor: 0.1
+
+ur_arm:
+  default_planner_config: RRTConnectkConfigDefault
+```
+
+The full set of available planners includes RRT, RRT*, TRRT, PRM, PRM*, FMT, BFMT, SBL, EST, KPIECE, BKPIECE, LBKPIECE, STRIDE, SPARS, SPARStwo, BiTRRT, LBTRRT, BiEST, ProjEST, LazyPRM, LazyPRM*, PDST, TrajOpt, and AnytimePathShortening. CHOMP and Pilz Industrial Motion Planner are also available in the `move_group` launch (not in `moveit_py` mode).
+
+## moveit_py settings
+
+`config/moveit_py.yaml` configures the planning scene monitor for use with the `moveit_py` Python bindings:
+
+```yaml
+planning_scene_monitor_options:
+  name: "planning_scene_monitor"
+  robot_description: "robot_description"
+  joint_state_topic: "/joint_states"
+  attached_collision_object_topic: "/planning_scene_monitor"
+  publish_planning_scene_topic: "/publish_planning_scene"
+  monitored_planning_scene_topic: "/monitored_planning_scene"
+  wait_for_initial_state_timeout: 10.0
+
+planning_pipelines:
+  pipeline_names:
+    - ompl
+```
+
+## SRDF Xacro structure
+
+The SRDF is assembled from multiple Xacro files so that gripper-specific collision pairs are included only when relevant:
+
+```
+srdf/
+├── colman.srdf.xacro        # top-level; dispatches by gripper_type and use_camera
+├── arm.srdf.xacro           # ur_arm planning group, named states, arm collision pairs
+├── gripper.srdf.xacro       # custom gripper group and collision pairs
+├── robotiq.srdf.xacro       # Robotiq 2F-85 group and collision pairs
+├── vacuum_gripper.xacro     # vacuum tip collision pairs
+└── camera.srdf.xacro        # OAK-D Pro camera link collision pairs
+```
+
+`colman.srdf.xacro` accepts the same `gripper_type` and `use_camera` Xacro arguments as `colman.urdf.xacro`, ensuring the SRDF always matches the loaded URDF.
+
+## MoveItConfigsBuilder usage
+
+All launch files in this package and in `colman_motion` build their MoveIt configuration with `MoveItConfigsBuilder`. The canonical pattern is:
+
+```python
+from moveit_configs_utils import MoveItConfigsBuilder
+
+moveit_config = (
+    MoveItConfigsBuilder(robot_name="colman", package_name="colman_moveit_config")
+    .robot_description(
+        file_path="config/colman_moveit.urdf.xacro",
+        mappings={
+            "gripper_type": "custom",   # or "robotiq" / "vacuum"
+            "use_camera": use_camera,
+        },
+    )
+    .robot_description_semantic(
+        file_path="srdf/colman.srdf.xacro",
+        mappings={
+            "gripper_type": "custom",
+            "use_camera": use_camera,
+        },
+    )
+    .robot_description_kinematics(file_path="config/kinematics.yaml")
+    .planning_pipelines(pipelines=["ompl"])
+    .moveit_cpp(file_path=get_package_share_directory("colman_moveit_config")
+                          + "/config/moveit_py.yaml")
+    .to_moveit_configs()
+)
+```
+
+<Tip>
+The `.moveit_cpp()` call is only needed for `moveit_py`-based nodes (like `pick_and_place`). The `move_group` launch files use `.planning_pipelines(pipelines=["ompl", "chomp", "pilz_industrial_motion_planner"])` instead and omit `.moveit_cpp()`.
+</Tip>
+
+## Launch files
+
+| File                               | Purpose                                                        |
+|------------------------------------|----------------------------------------------------------------|
+| `colman_moveit_custom.launch.py`   | `move_group` + RViz2 for `custom` gripper type                 |
+| `colman_moveit_robotiq.launch.py`  | `move_group` + RViz2 for `robotiq` gripper type                |
+| `colman_moveit.launch.py`          | Generic entry-point (accepts `gripper_type` argument)          |
+| `move_group.launch.py`             | Bare `move_group` node without RViz2                           |
+| `moveit_rviz.launch.py`            | RViz2 only, for connecting to a running `move_group`           |
+| `ur_moveit.launch.py`              | Combined UR driver + MoveIt for real hardware use              |
+| `warehouse_db.launch.py`           | MongoDB warehouse server for motion plan persistence           |
+
+These launch files are not invoked directly in normal usage — `colman_bringup/moveit.launch.py` selects and includes the correct one based on `gripper_type`.

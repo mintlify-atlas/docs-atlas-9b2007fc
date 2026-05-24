@@ -1,0 +1,169 @@
+---
+title: "colman_perception: camera and perception ROS nodes"
+description: "ROS 2 nodes for the OAK-D Pro wrist camera: RGB image publishing, YOLO11 instance segmentation, stereo camera info correction, and AprilTag configuration."
+---
+
+The `colman_perception` package provides the sensor and perception layer for the Colman arm. It contains nodes that drive the OAK-D Pro depth camera over USB using the DepthAI SDK, run YOLO11 segmentation on the RGB stream, and prepare stereo camera info messages for the downstream depth pipeline. AprilTag configuration is also housed here and consumed by `colman_bringup`.
+
+## Nodes
+
+### CameraPublisher
+
+Drives the OAK-D Pro camera directly via `depthai` and publishes the undistorted RGB stream along with calibrated `CameraInfo` to ROS 2. Camera intrinsics are read live from the device calibration so no separate calibration file is required.
+
+| Property       | Value                                              |
+|----------------|----------------------------------------------------|
+| Node name      | `camera_publisher`                                 |
+| Resolution     | 1280 × 720                                         |
+| Camera FPS     | 15 Hz (set on the DepthAI pipeline)                |
+| Timer rate     | 30 Hz (publishes only when a new frame is available)|
+| Frame ID       | `oakd_pro_camera_rgb_optical_frame_wrist`          |
+| Distortion model | `plumb_bob` with zero distortion coefficients (undistortion applied in hardware) |
+
+**Published topics:**
+
+| Topic                        | Type                      | Description                        |
+|------------------------------|---------------------------|------------------------------------|
+| `/oakd_pro/rgb/image`        | `sensor_msgs/Image`       | Undistorted BGR8 RGB frames        |
+| `/oakd_pro/rgb/camera_info`  | `sensor_msgs/CameraInfo`  | Intrinsic matrix from device calibration |
+
+The node uses `qos_profile_sensor_data` (best-effort, volatile) on both publishers so downstream nodes like `apriltag_ros` and the YOLO detector receive images without delivery guarantees blocking the pipeline.
+
+```bash
+ros2 run colman_perception camera_publisher
+```
+
+<Warning>
+`CameraPublisher` requires the OAK-D Pro to be connected via USB before launch. The node closes the DepthAI device cleanly on `KeyboardInterrupt` or node destruction to avoid leaving the USB device in a locked state.
+</Warning>
+
+---
+
+### DetectionNode
+
+Runs YOLO11 medium segmentation (`yolo11m-seg.pt`) on the OAK-D Pro RGB stream and publishes annotated images for visualisation in RViz2 or `rqt_image_view`.
+
+| Property       | Value                                   |
+|----------------|-----------------------------------------|
+| Node name      | `yolo_node`                             |
+| Model          | `yolo11m-seg.pt` (instance segmentation)|
+| Inference rate | 20 Hz timer                             |
+
+**Subscribed topics:**
+
+| Topic                   | Type                | Description                 |
+|-------------------------|---------------------|-----------------------------|
+| `/oakd_pro/rgb/image`   | `sensor_msgs/Image` | Incoming RGB frames from `CameraPublisher` |
+
+**Published topics:**
+
+| Topic              | Type                | Description                                      |
+|--------------------|---------------------|--------------------------------------------------|
+| `/yolo/annotated`  | `sensor_msgs/Image` | BGR8 image with bounding boxes and masks overlaid |
+
+The node caches the latest frame in `self.latest_image` on subscription and runs inference inside a 20 Hz timer callback, decoupling the detection rate from the camera publish rate. If no image has been received yet, a warning is throttled to once every 5 seconds.
+
+```bash
+ros2 run colman_perception detection
+# or via launch:
+ros2 launch colman_bringup yolo.launch.py
+```
+
+---
+
+### CameraInfoRepublisher
+
+Adapts raw `CameraInfo` messages from the OAK-D Pro stereo cameras for use with `stereo_image_proc`. The raw messages lack a stereo baseline in their projection matrix; this node injects `P[3] = -fx * baseline_m` for the right camera and zeroes `P[3]` for the left camera, which is the ROS stereo convention.
+
+| Property   | Value                         |
+|------------|-------------------------------|
+| Node name  | `camera_info_republisher`     |
+
+**Parameters:**
+
+<ParamField path="baseline_m" type="float" default="0.075">
+  Stereo baseline in metres. Matches the physical distance between the OAK-D Pro left and right sensors.
+</ParamField>
+
+<ParamField path="left_camera_info_in" type="string" default="/oakd_pro/left/camera_info">
+  Input topic for left camera info.
+</ParamField>
+
+<ParamField path="right_camera_info_in" type="string" default="/oakd_pro/right/camera_info">
+  Input topic for right camera info.
+</ParamField>
+
+<ParamField path="left_camera_info_out" type="string" default="/oakd_pro/left/camera_info_calibrated">
+  Output topic for corrected left camera info.
+</ParamField>
+
+<ParamField path="right_camera_info_out" type="string" default="/oakd_pro/right/camera_info_calibrated">
+  Output topic for corrected right camera info.
+</ParamField>
+
+<ParamField path="left_frame_id" type="string" default="">
+  If non-empty, overrides the `frame_id` in the output left camera info header.
+</ParamField>
+
+<ParamField path="right_frame_id" type="string" default="">
+  If non-empty, overrides the `frame_id` in the output right camera info header.
+</ParamField>
+
+The node also normalises the ROI fields: if `roi.width` or `roi.height` is zero (as is common when no ROI is set), it fills them with the image width and height, and resets offsets to zero.
+
+`depth.launch.py` configures this node to remap both output topics to `/oakd_pro/left/camera_info` and `/oakd_pro/right/camera_info` so `image_proc` and `stereo_image_proc` receive them transparently.
+
+```bash
+ros2 launch colman_bringup depth.launch.py
+```
+
+---
+
+## AprilTag configuration
+
+The file `config/apriltag.yaml` is loaded by `apriltag.launch.py` and configures the `apriltag_ros` node for the Colman demo workspace.
+
+```yaml
+apriltag:
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    size: 0.10           # 10 cm physical tag size
+    max_hamming: 0       # no error correction bits — high precision
+    detector:
+      threads: 2
+      decimate: 2.0      # 2× image decimation for speed
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+    pose_estimation_method: "pnp"
+    tag:
+      ids:    [1]
+      frames: ["tag_1"]
+      sizes:  [0.10]
+```
+
+| Parameter               | Value     | Notes                                                        |
+|-------------------------|-----------|--------------------------------------------------------------|
+| `family`                | `36h11`   | Standard AprilTag family used on the Colman workspace tags   |
+| `size`                  | `0.10` m  | Physical side length of the printed tag                      |
+| `max_hamming`           | `0`       | Rejects any detection with bit errors; maximises pose accuracy |
+| `decimate`              | `2.0`     | Halves image resolution before detection to reduce CPU load  |
+| `pose_estimation_method`| `pnp`     | OpenCV PnP solver for 6-DOF pose estimation                  |
+| Tag ID 1 frame          | `tag_1`   | TF frame name published for the single workspace tag         |
+
+<Tip>
+If you add more tags to the workspace, extend the `ids`, `frames`, and `sizes` lists. Each tag can have its own size, which is useful if you use different-scale tags for different objects.
+</Tip>
+
+## Topic summary
+
+| Topic                           | Direction   | Node                    | Type                     |
+|---------------------------------|-------------|-------------------------|--------------------------|
+| `/oakd_pro/rgb/image`           | Published   | `CameraPublisher`       | `sensor_msgs/Image`      |
+| `/oakd_pro/rgb/camera_info`     | Published   | `CameraPublisher`       | `sensor_msgs/CameraInfo` |
+| `/oakd_pro/rgb/image`           | Subscribed  | `DetectionNode`         | `sensor_msgs/Image`      |
+| `/yolo/annotated`               | Published   | `DetectionNode`         | `sensor_msgs/Image`      |
+| `/oakd_pro/left/camera_info`    | Subscribed  | `CameraInfoRepublisher` | `sensor_msgs/CameraInfo` |
+| `/oakd_pro/right/camera_info`   | Subscribed  | `CameraInfoRepublisher` | `sensor_msgs/CameraInfo` |

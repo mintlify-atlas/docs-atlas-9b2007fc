@@ -1,0 +1,146 @@
+---
+title: "Pixi tasks and ros2 launch command reference guide"
+description: "Complete reference for all pixi tasks in the ARM Demos project, including robot launch, simulation, demo, and utility commands with their arguments and aliases."
+---
+
+The ARM Demos project uses [pixi](https://pixi.sh) to manage the development environment and expose all common operations as named tasks. You run tasks with `pixi run <task>` from the project root, or enter `pixi shell` once to activate the environment and use commands directly. The `build` task is a prerequisite for the robot launch tasks and runs automatically when needed.
+
+<AccordionGroup>
+
+<Accordion title="Core tasks">
+
+These are the primary tasks you will use day-to-day for building and running demos.
+
+| Task | Command | Description |
+|------|---------|-------------|
+| `pixi run build` | `colcon build --symlink-install` | Builds all packages under `src/` and writes outputs to `install/`. Uses symlink install so Python source edits take effect without rebuilding. |
+| `pixi run arm-demo` | `ros2 launch arm_demo arm_demo.launch.py gripper_type:=vacuum use_camera:=false` | Launches the hand-tracking arm demo with a vacuum gripper and no external camera node. |
+| `pixi run demo-gripper` | `ros2 launch colman_motion pick_and_place.launch.py gripper_type:=vacuum` | Launches the pick-and-place demo using AprilTag detection and the vacuum gripper. |
+
+</Accordion>
+
+<Accordion title="Task aliases">
+
+Short aliases are provided for frequently used tasks.
+
+| Alias | Resolves to | Notes |
+|-------|-------------|-------|
+| `pixi run b` | `build` | Short form of the build task. |
+| `pixi run launch` | `launch-lan` | Connects to the physical robot over LAN. |
+| `pixi run run` | `launch-lan` | Identical alias for `launch`. |
+| `pixi run sim` | `launch-sim` | Starts the driver with mock hardware. |
+| `pixi run mock` | `launch-sim` | Identical alias for `sim`. |
+
+</Accordion>
+
+<Accordion title="Robot launch tasks">
+
+These tasks start the UR robot driver. Both `launch-lan` and `launch-sim` depend on `build` and run it first if outputs are stale.
+
+**`pixi run launch` / `pixi run launch-lan`** — Real LAN robot
+
+Connects to the physical UR3e at `192.168.56.101`. The dashboard client is disabled; headless mode is enabled so the robot runs without a teach pendant UI.
+
+```bash
+pixi run launch
+```
+
+Effective driver arguments:
+
+| Argument | Value |
+|----------|-------|
+| `ur_type` | `ur3e` |
+| `robot_ip` | `192.168.56.101` |
+| `use_mock_hardware` | `false` |
+| `headless_mode` | `true` |
+| `launch_dashboard_client` | `false` |
+
+---
+
+**`pixi run sim` / `pixi run mock`** — Mock hardware (simulation)
+
+Starts the driver with simulated hardware. No physical robot is required. RViz is available for visualization.
+
+```bash
+pixi run sim
+```
+
+Effective driver arguments:
+
+| Argument | Value |
+|----------|-------|
+| `ur_type` | `ur3e` |
+| `robot_ip` | `0.0.0.0` |
+| `use_mock_hardware` | `true` |
+| `headless_mode` | `false` |
+| `launch_dashboard_client` | `false` |
+
+---
+
+**`pixi run moveit`** — MoveIt with RViz
+
+Launches the MoveIt move group and RViz for the UR3e. Useful for inspecting the planning scene or testing motions interactively.
+
+```bash
+pixi run moveit
+```
+
+Runs: `ros2 launch ur_moveit_config ur_moveit.launch.py ur_type:=ur3e use_sim_time:=true launch_rviz:=true`
+
+<Note>
+Start the robot driver (`pixi run sim` or `pixi run launch`) before running this task. MoveIt requires an active `joint_state_broadcaster` to know the robot's current state.
+</Note>
+
+</Accordion>
+
+<Accordion title="_launch template task arguments">
+
+`launch-lan` and `launch-sim` are both thin wrappers around the internal `_launch` template task, which calls `ur_robot_driver ur_control.launch.py` with the following parameterized arguments.
+
+| Argument | Type | Choices | Description |
+|----------|------|---------|-------------|
+| `ur_type` | string | — | Robot model identifier. Set to `ur3e` for the Colman arm. |
+| `robot_ip` | string | — | Network address of the robot controller. |
+| `description_launchfile` | string | — | Absolute path to the robot state publisher (RSP) launch file, resolved via `ros2 pkg prefix colman_bringup`. |
+| `use_mock_hardware` | string | `false`, `true` | When `true`, the driver simulates hardware without a physical robot. |
+| `headless_mode` | string | `false`, `true` | When `true`, suppresses the UR dashboard client UI. Required for unattended operation. |
+| `launch_dashboard_client` | string | `false`, `true` | Whether to launch the UR dashboard client node. |
+
+The template also always passes `gripper_type:=vacuum` to the driver.
+
+</Accordion>
+
+<Accordion title="Utility tasks">
+
+| Task | Description |
+|------|-------------|
+| `pixi run download-mediapipe-model` | Downloads `hand_landmarker.task` from Google's MediaPipe model storage into the current directory. Required before running `arm-demo`. |
+| `pixi run view-ur` | Launches `urdf_tutorial display.launch.py` to visualize the robot URDF in RViz without a running driver. |
+| `pixi run psgrep` | Runs `ps aux \| grep "$PIXI_PROJECT_ROOT"` to list all processes associated with the project. Useful for finding stale nodes. |
+| `pixi run clean` | Removes the `build/`, `install/`, and `log/` directories. Run this before a full rebuild. |
+| `pixi run purge` | Removes `.pixi/`, `build/`, `install/`, `log/`, and `~/.cache/rattler`. Use this to reset the entire pixi environment and package cache. |
+
+<Warning>
+`pixi run purge` deletes the rattler package cache at `~/.cache/rattler`. This affects all pixi projects on the machine, not just ARM Demos. Re-downloading packages after a purge can take several minutes.
+</Warning>
+
+</Accordion>
+
+<Accordion title="OAK viewer environment tasks">
+
+These tasks belong to the `oak-viewer` pixi environment, which is isolated from the default environment. You must prefix each command with `--environment oak-viewer`.
+
+| Task | Description |
+|------|-------------|
+| `pixi run --environment oak-viewer install-oak` | Runs `tools/create-oak-env.sh` to create the OAK viewer environment with its dependencies. Run this once before using the other OAK tasks. |
+| `pixi run --environment oak-viewer setup-oak` | Writes a udev rule for the OAK-D camera (`idVendor==03e7`, `MODE="0666"`) and reloads udev. Required on Linux before first use. |
+| `pixi run --environment oak-viewer connect-oak-wsl` | Runs `tools/connect-oak-wsl.ps1` via `powershell.exe` to attach the OAK-D USB device inside WSL. Only needed on Windows Subsystem for Linux. |
+| `pixi run --environment oak-viewer oak-viewer` | Launches the OAK viewer application using `dbus-launch oak-viewer`. |
+
+<Tip>
+On a native Linux host you only need `install-oak` and `setup-oak` once. Skip `connect-oak-wsl` unless you are running inside WSL.
+</Tip>
+
+</Accordion>
+
+</AccordionGroup>

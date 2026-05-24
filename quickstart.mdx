@@ -1,81 +1,124 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: "Quickstart: clone, build, and run your first ARM Demo"
+description: "Clone the arm-demos repo, install dependencies with Pixi, build the ROS 2 workspace with colcon, and launch a demo on mock or real hardware."
 ---
 
-## Get started in three steps
+This guide takes you from a bare Linux machine to a running demo in as few steps as possible. All ROS 2 and Python dependencies — including MoveIt 2, DepthAI, and MediaPipe — are managed by [Pixi](https://prefix.dev/docs/pixi/installation), so you do not need a pre-installed ROS environment.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  The hand tracking demo requires the `hand_landmarker.task` MediaPipe model file in your working directory before you launch. Step 5 explains how to download it.
+</Note>
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Clone the repository">
+    Clone the `arm-demos` repository and enter the project directory.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    git clone https://github.com/MRRP-lab/arm-demos.git && cd arm-demos
+    ```
+  </Step>
 
-### Step 2: Deploy your changes
+  <Step title="Install Pixi">
+    Pixi is the package manager used to install all ROS 2 and Python dependencies in a self-contained environment. If you have not installed it yet, follow the [Pixi installation guide](https://prefix.dev/docs/pixi/installation).
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    Verify the installation:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```bash
+    pixi --version
+    ```
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Build the workspace">
+    Build all colcon packages with symlink installs so that Python source changes take effect without rebuilding.
 
-### Step 3: Go live
+    ```bash
+    pixi run build
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    This runs `colcon build --symlink-install` inside the Pixi environment. Build outputs go to `install/` and `build/`. Subsequent runs skip unchanged packages.
+  </Step>
+
+  <Step title="Run the simulation demo">
+    Launch the UR3e driver against mock hardware (no physical robot required). This brings up the full ros2_control stack with `use_mock_hardware:=true`.
+
+    ```bash
+    pixi run sim
+    ```
+
+    RViz opens and shows the robot model. You can inspect joint states and test MoveIt 2 planning without connecting to a real arm.
+  </Step>
+
+  <Step title="Download the MediaPipe hand landmark model">
+    The hand tracking demo requires the `hand_landmarker.task` model file at runtime. Download it to the current directory with:
+
+    ```bash
+    pixi run download-mediapipe-model
+    ```
+
+    This fetches `hand_landmarker.task` (float16, latest) from Google's MediaPipe model storage and saves it to the current directory. The `arm_demo` node expects the file at the path `hand_landmarker.task` relative to the working directory where you launch the node.
+  </Step>
+
+  <Step title="Run the hand tracking demo (real robot)">
+    With the `hand_landmarker.task` model present and the UR3e reachable on the LAN, start the hand tracking demo:
+
+    ```bash
+    pixi run arm-demo
+    ```
+
+    This is an alias for:
+
+    ```bash
+    ros2 launch arm_demo arm_demo.launch.py gripper_type:=vacuum use_camera:=false
+    ```
+
+    The OAK-D camera is accessed directly through the DepthAI SDK (not via a ROS camera node), so `use_camera:=false` disables the separate camera launch. Once running, hold your hand in front of the camera — the arm tracks your index fingertip position in real time. Press `q` in the OpenCV window or `Ctrl+C` to stop.
+
+    <Warning>
+      The real robot is expected at IP `192.168.56.101` on the lab LAN. Ensure the UR3e is powered on and reachable before running this command. Running against the wrong IP or with the robot in an unexpected state can cause uncontrolled motion.
+    </Warning>
+  </Step>
+
+  <Step title="Run the pick-and-place demo (real robot)">
+    To run the vision-guided pick-and-place demo with the vacuum gripper:
+
+    ```bash
+    pixi run demo-gripper
+    ```
+
+    This is an alias for:
+
+    ```bash
+    ros2 launch colman_motion pick_and_place.launch.py gripper_type:=vacuum
+    ```
+
+    The arm moves to a scanning pose, detects an AprilTag marker on the target object via the OAK-D camera, plans a collision-free pick trajectory with MoveIt 2, activates the vacuum gripper, and deposits the object at a fixed drop-off point. The loop repeats until you call `ros2 service call /stop std_srvs/srv/Trigger` or press `Ctrl+C`.
+  </Step>
+</Steps>
+
+## Quick reference: Pixi tasks
+
+| Task | Command | Description |
+|---|---|---|
+| `build` | `pixi run build` | Build all packages with `colcon --symlink-install` |
+| `sim` | `pixi run sim` | Launch UR3e driver with mock hardware |
+| `arm-demo` | `pixi run arm-demo` | Hand tracking demo (real robot) |
+| `demo-gripper` | `pixi run demo-gripper` | Pick-and-place demo (real robot) |
+| `download-mediapipe-model` | `pixi run download-mediapipe-model` | Download `hand_landmarker.task` model file |
+| `clean` | `pixi run clean` | Remove `build/`, `install/`, and `log/` directories |
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Environment setup" icon="wrench" href="/setup/environment">
+    Detailed instructions for configuring your development machine and the Pixi environment.
+  </Card>
+  <Card title="Hardware setup" icon="microchip" href="/setup/hardware">
+    Connect and verify the UR3e, OAK-D Pro camera, and vacuum gripper.
+  </Card>
+  <Card title="Hand tracking demo" icon="hand" href="/demos/hand-tracking">
+    Deep dive into how the MediaPipe and MoveIt 2 pipeline works.
+  </Card>
+  <Card title="Pick and place demo" icon="robot" href="/demos/pick-and-place">
+    Learn how AprilTag detection drives autonomous pick-and-place cycles.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

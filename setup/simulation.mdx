@@ -1,0 +1,86 @@
+---
+title: "Run the Colman UR3e arm in Gazebo with mock hardware"
+description: "Launch the Colman UR3e in Gazebo Harmonic using mock hardware mode, then open RViz with MoveIt 2 for motion planning without connecting to a physical robot."
+---
+
+The simulation stack runs the full UR robot driver with `use_mock_hardware:=true`, which replaces the real hardware interface with an internal joint-state simulator. Gazebo Harmonic renders the robot in a 3D table-world environment and bridges clock and sensor topics into ROS 2. This lets you develop, test, and visualize motion planning without connecting to the physical arm.
+
+## How mock hardware mode works
+
+When `use_mock_hardware:=true`, the `ur_robot_driver` loads a mock hardware plugin instead of communicating over the network. The plugin publishes simulated joint states and accepts joint trajectory commands exactly as the real driver would. The `robot_ip` is set to `0.0.0.0` because no network connection is made. `headless_mode` is set to `false` so that all standard topics and services are available for debugging.
+
+Contrast this with real-hardware mode (`launch-lan`), where `use_mock_hardware:=false`, `robot_ip:=192.168.56.101`, and `headless_mode:=true` to connect to the physical arm.
+
+## Simulation launch steps
+
+<Steps>
+  <Step title="Build the workspace">
+    The `sim` task depends on `build`, so Pixi will run `colcon build --symlink-install` automatically if the `install/` directory is out of date. You can also trigger a build explicitly:
+
+    ```bash
+    pixi run build
+    ```
+  </Step>
+
+  <Step title="Launch Gazebo with the mock driver">
+    Both `sim` and `mock` are aliases for the same `launch-sim` task:
+
+    ```bash
+    pixi run sim
+    # or equivalently
+    pixi run mock
+    ```
+
+    This starts:
+    - Gazebo Harmonic with the `table_world.sdf` scene
+    - The UR robot driver in mock hardware mode
+    - The `robot_state_publisher` with the Gazebo URDF
+    - The `ros_gz_bridge` clock bridge
+    - Joint state broadcaster and trajectory controller
+
+    Wait for the Gazebo window to open and the arm to appear in the scene before proceeding.
+  </Step>
+
+  <Step title="Open RViz with MoveIt 2">
+    In a second terminal, launch the MoveIt 2 planning stack and RViz:
+
+    ```bash
+    pixi run moveit
+    ```
+
+    This runs:
+
+    ```bash
+    ros2 launch ur_moveit_config ur_moveit.launch.py \
+      ur_type:=ur3e \
+      use_sim_time:=true \
+      launch_rviz:=true
+    ```
+
+    RViz opens with the MoveIt 2 motion planning panel. Use the interactive marker on the end effector to set a goal pose, then click **Plan & Execute** to send a trajectory to the simulated driver.
+  </Step>
+</Steps>
+
+## Viewing the URDF
+
+To inspect the robot description outside of a full simulation, use:
+
+```bash
+pixi run view-ur
+```
+
+This launches `urdf_tutorial display.launch.py`, which opens RViz with just the robot model and a joint state publisher GUI. Useful for verifying URDF changes, checking link frames, or understanding the kinematic chain before running any controllers.
+
+## Differences from real-hardware launch
+
+| Parameter | Simulation (`launch-sim`) | Real hardware (`launch-lan`) |
+|---|---|---|
+| `use_mock_hardware` | `true` | `false` |
+| `robot_ip` | `0.0.0.0` | `192.168.56.101` |
+| `headless_mode` | `false` | `true` |
+| `launch_dashboard_client` | `false` | `false` |
+| `use_sim_time` | `true` | `false` |
+
+<Tip>
+You can run the pick-and-place demo node against the simulated driver for motion testing, but the `VacuumControl` node's digital I/O calls will fail without the real UR hardware interface. Comment out or mock the `SetIO` calls when testing purely in simulation.
+</Tip>

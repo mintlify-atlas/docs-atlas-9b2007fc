@@ -1,0 +1,165 @@
+---
+title: "Eye-in-hand camera calibration for the Colman UR3e"
+description: "Compute the camera-to-gripper transform for the wrist-mounted OAK-D camera using TF2 data collection and OpenCV's hand-eye calibration solvers."
+---
+
+Eye-in-hand calibration determines the rigid transform between the wrist camera and the robot's tool flange (`tool0`). Once you have this transform, you can express any point the camera sees directly in the robot's base frame — a prerequisite for reliable vision-guided manipulation. The calibration workflow is split into two scripts: `eye_in_hand.py` for interactive data collection and `hand_eye_solve.py` for computing the transform.
+
+## Overview
+
+<CardGroup cols={2}>
+  <Card title="eye_in_hand.py" icon="camera">
+    Runs a ROS 2 node that reads TF2 transforms and saves pose samples to `calib_samples.npz` as you move the arm to different poses.
+  </Card>
+  <Card title="hand_eye_solve.py" icon="calculator">
+    Loads the saved samples and runs five OpenCV hand-eye calibration methods, then prints URDF `<origin>` tags for each result.
+  </Card>
+</CardGroup>
+
+## Calibration procedure
+
+<Steps>
+  <Step title="Mount the camera on the wrist">
+    Attach the OAK-D Pro camera to the UR3e wrist mount so it is rigidly fixed relative to `tool0`. Any movement between captures will corrupt the calibration.
+  </Step>
+  <Step title="Place the AprilTag target">
+    Fix an AprilTag 36h11 marker with ID `tag_20` in a stationary location within the camera's field of view. The tag must remain completely still during the entire data collection session.
+  </Step>
+  <Step title="Start bringup">
+    Bring up the robot driver, `ros2_control`, and the AprilTag detection node so that TF2 frames for `tag_20` and `tool0` are being published:
+
+    ```bash
+    pixi run launch   # real hardware
+    # or
+    pixi run sim      # mock hardware
+    ```
+  </Step>
+  <Step title="Run the data collection script">
+    ```bash
+    ros2 run colman_motion eye_in_hand
+    ```
+
+    The node starts and prints: `enter to save pose, q to quit`.
+  </Step>
+  <Step title="Move the arm and capture samples">
+    Jog the arm to a new pose (different height, rotation, and distance from the tag). When the arm is still, press **Enter** to capture the sample. The node looks up two TF2 transforms:
+
+    - `base_link` → `tool0` (arm end-effector pose)
+    - `oakd_pro_camera_rgb_optical_frame_wrist` → `tag_20` (tag in camera frame)
+
+    The `capture()` method records both:
+
+    ```python
+    def capture(self):
+        try:
+            ee  = self.tf_buffer.lookup_transform(BASE_FRAME, EE_FRAME,     Time())
+            tag = self.tf_buffer.lookup_transform(CAMERA_FRAME, TAG_FRAME,  Time())
+        except TransformException as e:
+            self.get_logger().warn(f"skipped frame: {e}")
+            return
+
+        R, t = get_rotation_translation(ee)
+        self.arm_rotations.append(R)
+        self.arm_translations.append(t)
+
+        R, t = get_rotation_translation(tag)
+        self.tag_rotations.append(R)
+        self.tag_translations.append(t)
+
+        self.get_logger().info(f"captured sample {len(self.arm_rotations)}")
+    ```
+
+    Repeat for at least 10–15 distinct poses.
+
+    <Tip>
+      Use diverse poses: vary pan, tilt, height, and distance. Poses that are too similar will produce a degenerate system and an inaccurate result. At a minimum, include large rotations around each axis.
+    </Tip>
+  </Step>
+  <Step title="Save the samples">
+    Press **`q`** and Enter. The node saves all samples to `calib_samples.npz` in the current working directory and shuts down.
+
+    ```
+    saved 14 samples to calib_samples.npz
+    ```
+  </Step>
+  <Step title="Run the solver">
+    ```bash
+    python3 hand_eye_solve.py
+    ```
+
+    `hand_eye_solve.py` loads `calib_samples.npz` and runs five calibration methods:
+
+    ```python
+    METHODS = {
+        "TSAI":       cv2.CALIB_HAND_EYE_TSAI,
+        "PARK":       cv2.CALIB_HAND_EYE_PARK,
+        "HORAUD":     cv2.CALIB_HAND_EYE_HORAUD,
+        "ANDREFF":    cv2.CALIB_HAND_EYE_ANDREFF,
+        "DANIILIDIS": cv2.CALIB_HAND_EYE_DANIILIDIS,
+    }
+    ```
+
+    For each method the solver removes the fixed optical-frame rotation before reporting the result:
+
+    ```python
+    # The OAK-D optical frame is rotated relative to the camera body frame.
+    # Remove that rotation to get the transform in the body (URDF) convention.
+    optical_rotation = Rotation.from_euler("xyz", [-np.pi/2, 0, -np.pi/2]).as_matrix()
+    body_rotation = cam_gripper_rotation @ optical_rotation.T
+    ```
+
+    Output for each method is a URDF `<origin>` tag:
+
+    ```xml
+    TSAI
+    <origin xyz="0.032145 -0.011203 0.048762" rpy="-0.012 0.005 1.571" />
+
+    PARK
+    <origin xyz="0.032089 -0.011198 0.048801" rpy="-0.011 0.005 1.571" />
+    ...
+    ```
+  </Step>
+  <Step title="Update the URDF">
+    Compare the five outputs. They should agree to within a few millimetres in translation and a few tenths of a degree in rotation. If they diverge significantly, collect more diverse samples and re-run.
+
+    Copy the result (TSAI or the average) into the camera mount `<joint>` in your URDF xacro:
+
+    ```xml
+    <joint name="wrist_camera_joint" type="fixed">
+      <parent link="tool0"/>
+      <child  link="oakd_pro_camera_rgb_camera_frame_wrist"/>
+      <origin xyz="0.032145 -0.011203 0.048762" rpy="-0.012 0.005 1.571" />
+    </joint>
+    ```
+
+    Rebuild the workspace after editing the URDF:
+
+    ```bash
+    pixi run build
+    ```
+  </Step>
+</Steps>
+
+## TF2 frames used
+
+| Frame | Description |
+|---|---|
+| `base_link` | Robot base (world anchor) |
+| `tool0` | Robot tool flange (end-effector) |
+| `oakd_pro_camera_rgb_optical_frame_wrist` | Camera optical frame (published by the OAK-D driver) |
+| `tag_20` | AprilTag 36h11, ID 20 (published by the AprilTag node) |
+
+## Saved data format
+
+`calib_samples.npz` contains four arrays, each with one entry per captured pose:
+
+| Key | Shape | Description |
+|---|---|---|
+| `arm_rotations` | `(N, 3, 3)` | Rotation matrices for `base_link → tool0` |
+| `arm_translations` | `(N, 3, 1)` | Translation vectors for `base_link → tool0` |
+| `tag_rotations` | `(N, 3, 3)` | Rotation matrices for `camera → tag_20` |
+| `tag_translations` | `(N, 3, 1)` | Translation vectors for `camera → tag_20` |
+
+<Note>
+  Keep `calib_samples.npz` alongside `hand_eye_solve.py`, or pass the path explicitly if you run the solver from a different directory.
+</Note>
